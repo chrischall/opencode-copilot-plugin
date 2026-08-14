@@ -37,6 +37,16 @@ export const DISENGAGE_TOOL_BUDGET = 12;
 export const LEAN_TOOLS = ["bash", "read", "edit", "write", "apply_patch", "grep"] as const;
 
 /**
+ * How many tools to keep when we recognise none of the harness's names.
+ *
+ * This is the path a future opencode rename drops us on — `apply_patch` replaced
+ * `edit`/`write` once already — so it must not sit at the edge of the threshold.
+ * ~12 is where the filter "disengages once and recovers on retry"; landing there by
+ * accident would look like flakiness rather than a drifted allowlist.
+ */
+export const LEAN_FALLBACK_LIMIT = 5;
+
+/**
  * opencode built-ins we switch off in lean mode.
  *
  * Each one is a tool block in the injected prompt, and the count is what trips the
@@ -82,8 +92,33 @@ export function selectLeanTools(tools: readonly ToolDef[]): ToolDef[] {
   // cap in the order the harness offered them.
   const shell = findShellTool(tools);
   const rest = tools.filter((tool) => tool !== shell);
-  const budget = DISENGAGE_TOOL_BUDGET - 1;
-  return [...(shell ? [shell] : []), ...rest.slice(0, shell ? budget - 1 : budget)];
+  const remaining = shell ? LEAN_FALLBACK_LIMIT - 1 : LEAN_FALLBACK_LIMIT;
+  return [...(shell ? [shell] : []), ...rest.slice(0, remaining)];
+}
+
+/** Tool names that mean "change a file", across opencode versions and harnesses. */
+const EDITING_TOOLS = ["edit", "write", "apply_patch", "patch", "str_replace", "create"];
+
+/**
+ * Describe anything worrying about the trimmed toolset, or undefined if it is fine.
+ *
+ * The allowlist in `LEAN_TOOLS` is coupled to what the harness calls its tools, and
+ * that has already changed once. When the trim silently removes the ability to edit
+ * or to run a command, the model degrades quietly — worth a line in the log rather
+ * than a mystery.
+ */
+export function describeToolSelection(requested: readonly ToolDef[]): string | undefined {
+  if (requested.length === 0) return undefined;
+  const kept = selectLeanTools(requested);
+  const names = kept.map((tool) => tool.function.name.toLowerCase());
+
+  if (!findShellTool(kept)) {
+    return "the trimmed toolset has no shell tool, so shell-routing is unavailable and tool calling will be markedly less reliable";
+  }
+  if (!names.some((name) => EDITING_TOOLS.includes(name))) {
+    return "the trimmed toolset has no editing tool — the model can only change files through the shell. The harness may have renamed its tools; check LEAN_TOOLS.";
+  }
+  return undefined;
 }
 
 export interface PluginOptions {
@@ -93,7 +128,14 @@ export interface PluginOptions {
   setDefaultModel: boolean;
   /** Point `small_model` at the local titler so title generation never hits M365. */
   setSmallModel: boolean;
-  /** Replace opencode's system prompt with a lean one. */
+  /**
+   * Replace the harness's prose system prompt with a lean one.
+   *
+   * Off by default, and deliberately NOT implied by `lean`. Trimming the toolset is
+   * a measured necessity; replacing the prose is an unverified bet borrowed from
+   * another harness's measurements, and it costs the user's own AGENTS.md rules if
+   * the preservation logic is ever wrong.
+   */
   leanSystemPrompt: boolean;
   /** Use an already-running proxy instead of starting one in-process. */
   baseUrl?: string;
@@ -113,7 +155,7 @@ export function resolveOptions(raw: Partial<PluginOptions> | undefined): PluginO
     lean: bool(options.lean, true),
     setDefaultModel: bool(options.setDefaultModel, true),
     setSmallModel: bool(options.setSmallModel, true),
-    leanSystemPrompt: bool(options.leanSystemPrompt, bool(options.lean, true)),
+    leanSystemPrompt: bool(options.leanSystemPrompt, false),
     baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
   };
 }

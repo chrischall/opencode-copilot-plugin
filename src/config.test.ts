@@ -3,11 +3,13 @@ import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
 import {
   DISENGAGE_TOOL_BUDGET,
+  LEAN_FALLBACK_LIMIT,
   LEAN_TOOLS,
   PROVIDER_ID,
   applyPluginConfig,
   buildProviderConfig,
   buildToolProfile,
+  describeToolSelection,
   mergeOpencodeConfig,
   resolveOptions,
   selectLeanTools,
@@ -118,9 +120,27 @@ describe("selecting the toolset the model actually sees", () => {
     expect(selectLeanTools(small)).toEqual(small);
   });
 
-  it("falls back to a hard cap for a harness whose tool names we do not know", () => {
+  it("falls back to a cap well clear of the threshold, not just under it", () => {
+    // The fallback is the path a future opencode rename lands us on, so it must not
+    // sit at the "borderline, disengages once" edge. Comfortably below, not 11.
     const unknown = Array.from({ length: 20 }, (_, i) => tool(`custom_${i}`));
-    expect(selectLeanTools(unknown).length).toBeLessThan(DISENGAGE_TOOL_BUDGET);
+    expect(selectLeanTools(unknown)).toHaveLength(LEAN_FALLBACK_LIMIT);
+    expect(LEAN_FALLBACK_LIMIT).toBeLessThanOrEqual(DISENGAGE_TOOL_BUDGET / 2);
+  });
+
+  it("reports when the trim left no way to edit a file", () => {
+    // Survivable — bash heredocs still work — but it means opencode renamed its
+    // editing tools and our allowlist has drifted.
+    expect(describeToolSelection([tool("bash"), tool("read")])).toMatch(/no editing tool/i);
+    expect(describeToolSelection([tool("bash"), tool("apply_patch")])).toBeUndefined();
+  });
+
+  it("reports when the trim left no shell tool, which breaks shell-routing", () => {
+    expect(describeToolSelection([tool("read"), tool("edit")])).toMatch(/shell/i);
+  });
+
+  it("says nothing when the toolset came through intact", () => {
+    expect(describeToolSelection([tool("bash"), tool("read"), tool("edit")])).toBeUndefined();
   });
 
   it("keeps an unrecognised shell tool when capping", () => {
@@ -142,6 +162,18 @@ describe("plugin options", () => {
 
   it("can be opted out of", () => {
     expect(resolveOptions({ lean: false }).lean).toBe(false);
+  });
+
+  it("does not replace the harness's system prompt by default", () => {
+    // Trimming the toolset is a measured necessity; replacing the prose prompt is
+    // not, and it costs the project's own AGENTS.md rules if it goes wrong. Lean
+    // mode should not imply it.
+    expect(resolveOptions({}).leanSystemPrompt).toBe(false);
+    expect(resolveOptions({ lean: true }).leanSystemPrompt).toBe(false);
+  });
+
+  it("can be opted into explicitly", () => {
+    expect(resolveOptions({ leanSystemPrompt: true }).leanSystemPrompt).toBe(true);
   });
 
   it("defaults to managing the model default and the small model", () => {

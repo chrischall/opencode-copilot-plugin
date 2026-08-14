@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel } from "./models.js";
-import { selectLeanTools } from "./config.js";
+import { describeToolSelection, selectLeanTools } from "./config.js";
 import { CopilotSession, DisengagedError } from "./session.js";
 import {
   ChatCompletionRequest,
@@ -32,6 +32,9 @@ import { parseToolCalls } from "./fenced.js";
 import { createLogger } from "./log.js";
 
 const log = createLogger("server");
+
+/** See the warning in `handleChatCompletion`; this keeps it to once per process. */
+let warnedAboutToolSelection = false;
 
 export interface ServerDeps {
   /** Supplies a Sydney chat token. */
@@ -175,6 +178,14 @@ async function handleChatCompletion(
   const tools = context.deps.lean === false ? requested : selectLeanTools(requested);
   if (tools.length !== requested.length) {
     log.info(`trimmed toolset ${requested.length} -> ${tools.length}`, tools.map((t) => t.function.name).join(","));
+    // Reached only when the trim actually removed something, which cannot happen
+    // with lean off. Warn once per process rather than per turn: a drifted
+    // allowlist is a standing condition, not a per-request event.
+    const concern = describeToolSelection(requested);
+    if (concern && !warnedAboutToolSelection) {
+      warnedAboutToolSelection = true;
+      log.warn(concern);
+    }
   }
 
   // The titler never touches M365 — see models.ts for why that matters.

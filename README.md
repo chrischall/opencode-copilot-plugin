@@ -45,7 +45,7 @@ will engage with**. Measured against opencode 1.18.18 on a single agentic turn:
 | | stock | with this plugin |
 |---|---|---|
 | tools offered | 9 | 4 |
-| prompt sent to M365 | 53,676 chars | 1,853 chars |
+| prompt sent to M365 | 53,676 chars | 9,701 chars |
 | `<available_skills>` catalogue | 34,263 chars | removed |
 
 The trimming is on by default. Turn it off with `{ "lean": false }` and expect empty
@@ -75,10 +75,12 @@ What gets dropped:
 - **Capability catalogues** — `<available_skills>` is removed when no `skill` tool
   survives the trim, because it advertises capabilities nothing can invoke. `<env>` and
   other structured context are kept.
-- **The prose system prompt** — replaced with a short one. A long, polished assistant
-  prompt measurably reduces M365's tool compliance; the same model that complies under
-  a terse prompt confabulates ("I can't access the files, paste them") under a careful
-  one. Disable with `{ "leanSystemPrompt": false }`.
+- **The harness's prose system prompt** — replaced with a short one, but **off by
+  default**. A long, polished assistant prompt measurably reduces M365's tool
+  compliance on another harness's numbers; that is a borrowed result we have not
+  reproduced, so it is opt-in via `{ "leanSystemPrompt": true }`. Your own rules are
+  never dropped either way: opencode injects `AGENTS.md` and global rules as prose
+  inside the system message, and those sections are preserved verbatim.
 
 `bash` is never dropped. M365's chat-tuned model will not "act as an agent" on request,
 but it *will* reflexively write a ```` ```bash ```` block — routing that block to the
@@ -115,7 +117,7 @@ warning and carries on.
 {
   "plugin": [["opencode-m365-copilot", {
     "lean": true,              // trim the toolset (default: true)
-    "leanSystemPrompt": true,  // replace opencode's prose prompt (default: follows lean)
+    "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
     "setDefaultModel": true,   // set `model` if you have not (default: true)
     "setSmallModel": true,     // route title generation to the local titler (default: true)
     "baseUrl": null            // use an already-running proxy instead of an in-process one

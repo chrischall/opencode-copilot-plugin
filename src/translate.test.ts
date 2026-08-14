@@ -175,6 +175,108 @@ describe("condensing the harness system prompt", () => {
     expect(condenseSystemPrompt("Just a system prompt.", [])).toBe("Just a system prompt.");
   });
 
+  // opencode injects project and global rules as PROSE inside the system message,
+  // introduced by a `Instructions from: <path>` line. Dropping them silently means a
+  // repo's own AGENTS.md stops applying with no sign in the UI.
+  describe("project instructions", () => {
+    const withRules = [
+      "You are OpenCode, a long polished assistant persona.",
+      "Instructions from: /home/me/project/AGENTS.md",
+      "# Project rules",
+      "",
+      "Never touch files under vendor/, and always run `make check`.",
+      "<env>cwd=/home/me/project</env>",
+    ].join("\n");
+
+    it("keeps them when the prose is replaced", () => {
+      const condensed = condenseSystemPrompt(withRules, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("Never touch files under vendor/");
+      expect(condensed).toContain("Instructions from: /home/me/project/AGENTS.md");
+    });
+
+    it("still drops the harness's own persona prose", () => {
+      const condensed = condenseSystemPrompt(withRules, [], { replaceProseWith: "SHORT" });
+      expect(condensed).not.toContain("polished assistant persona");
+      expect(condensed).toContain("SHORT");
+    });
+
+    it("keeps every instruction section, not just the first", () => {
+      const two = [
+        "persona prose",
+        "Instructions from: /home/me/.config/rules.md",
+        "GLOBAL RULE ONE",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "PROJECT RULE TWO",
+        "<env>x</env>",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(two, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("GLOBAL RULE ONE");
+      expect(condensed).toContain("PROJECT RULE TWO");
+    });
+
+    it("keeps a structured block that sits BEFORE the rules", () => {
+      // opencode puts `<env>` ahead of the instruction sections, so "keep only the
+      // trailing blocks" loses it.
+      const envFirst = [
+        "persona prose",
+        "<env>cwd=/tmp</env>",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "PROJECT RULE",
+        "trailing harness prose",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(envFirst, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("<env>cwd=/tmp</env>");
+      expect(condensed).toContain("PROJECT RULE");
+      expect(condensed).not.toContain("persona prose");
+    });
+
+    it("keeps rules that follow a tag-like line in the user's own file", () => {
+      // A rules file is Markdown and routinely contains HTML/JSX. Ending the
+      // section at the first `<word>` line would drop everything after it — the
+      // exact silent deletion this whole change exists to prevent.
+      const withHtml = [
+        "persona prose",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "<details> is fine in docs.",
+        "RULE AFTER THE TAG",
+        "<env>cwd=/tmp</env>",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(withHtml, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("RULE AFTER THE TAG");
+      expect(condensed).toContain("<details> is fine in docs.");
+    });
+
+    it("keeps rules that follow a complete tag pair in the user's own file", () => {
+      const withPair = [
+        "persona prose",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "Example:",
+        "<details>",
+        "<summary>expand</summary>",
+        "</details>",
+        "RULE AFTER THE PAIR",
+        "<env>cwd=/tmp</env>",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(withPair, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("RULE AFTER THE PAIR");
+      // ...and the user's own example is not duplicated into the preserved blocks.
+      expect(condensed.match(/<summary>expand<\/summary>/g)).toHaveLength(1);
+    });
+
+    it("stops a section at the first structured block rather than swallowing it", () => {
+      const condensed = condenseSystemPrompt(withRules, [], { replaceProseWith: "SHORT" });
+      // <env> is preserved once, as a block — not duplicated inside the rules text.
+      expect(condensed.match(/<env>/g)).toHaveLength(1);
+    });
+
+    it("still drops a catalogue that sits after the rules", () => {
+      const text = `${withRules}\n<available_skills>\n<skill>x</skill>\n</available_skills>`;
+      const condensed = condenseSystemPrompt(text, [], { replaceProseWith: "SHORT" });
+      expect(condensed).not.toContain("<available_skills>");
+      expect(condensed).toContain("Never touch files under vendor/");
+    });
+  });
+
   it("replaces the prose but keeps structured blocks when asked to go lean", () => {
     const text = `You are a long polished assistant persona.\n${skillsCatalogue}\n<env>cwd=/tmp</env>`;
     const condensed = condenseSystemPrompt(text, [], { replaceProseWith: "SHORT PROMPT" });
