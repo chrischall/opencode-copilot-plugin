@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.0...v0.2.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **build:** ship the plugin with no runtime dependencies ([#18](https://github.com/chrischall/opencode-copilot-plugin/issues/18)) ([073cabe](https://github.com/chrischall/opencode-copilot-plugin/commit/073cabe3fadb19cca678583fb7f3f9380fec33b0))
+
 ## [0.2.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.1.0...v0.2.0) (2026-08-14)
 
 
