@@ -63,5 +63,13 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chrischall/opencode-copilot-plugin.git"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
   }
 }
