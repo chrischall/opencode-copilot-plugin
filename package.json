@@ -46,7 +46,7 @@
     "@types/ws": "^8.18.1",
     "tsdown": "^0.22.14",
     "typescript": "^5.8.2",
-    "vitest": "^3.0.0"
+    "vitest": "^4.1.10"
   },
   "publishConfig": {
     "access": "public"
