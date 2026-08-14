@@ -237,7 +237,7 @@ async function importPlaywright(): Promise<any> {
     return await import("playwright");
   } catch {
     throw new Error(
-      "Playwright is not installed. It ships as an optional dependency — run `npm i playwright && npx playwright install chromium`, or set CHROMIUM_PATH to an existing browser.",
+      "Playwright is not installed. It is an optional peer dependency, deliberately not pulled in by the plugin itself — install it alongside this CLI with `npm i -g playwright && npx playwright install chromium`, or set CHROMIUM_PATH to an existing browser.",
     );
   }
 }
