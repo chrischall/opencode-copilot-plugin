@@ -1,6 +1,6 @@
 {
   "name": "opencode-m365-copilot",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use your org's Microsoft 365 Copilot as the model backend for opencode",
   "license": "MIT",
   "type": "module",
