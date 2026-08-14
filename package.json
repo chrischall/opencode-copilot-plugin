@@ -1,0 +1,67 @@
+{
+  "name": "opencode-m365-copilot",
+  "version": "0.1.0",
+  "description": "Use your org's Microsoft 365 Copilot as the model backend for opencode",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "opencode-m365": "./dist/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/plugin.d.mts",
+      "import": "./dist/plugin.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.mts",
+      "import": "./dist/server.mjs"
+    }
+  },
+  "main": "./dist/plugin.mjs",
+  "types": "./dist/plugin.d.mts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^5.1.1",
+    "otpauth": "^9.5.0",
+    "ws": "^8.20.0",
+    "zod": "^4.3.6"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.18",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "tsdown": "^0.15.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "microsoft-365",
+    "copilot",
+    "m365",
+    "openai-compatible",
+    "llm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chrischall/opencode-copilot-plugin.git"
+  }
+}

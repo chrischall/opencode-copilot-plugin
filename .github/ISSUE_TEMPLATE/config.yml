@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: The protocol itself
+    url: https://github.com/cramt/m365-copilot-proxy
+    about: This client implements a protocol reverse-engineered there. Findings about M365's own behaviour are usually more useful upstream.

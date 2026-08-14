@@ -1,0 +1,34 @@
+name: Protocol drift
+description: M365 changed something and the client no longer matches
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        M365 Copilot is undocumented and first-party-only. Microsoft changes it
+        without notice, and when they do this client breaks in ways that look like
+        bugs but are not. Use this template for that case.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: What drifted
+      options:
+        - A tone (model) stopped working or a new one appeared
+        - Frame shape changed (fields missing, new messageType)
+        - Disengaged now fires where it did not
+        - Copilot Studio / Power Platform API changed
+        - Auth (scopes, redirect, client id)
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: |
+        Captured frames beat description. `M365_DUMP_FRAMES=1` writes both directions
+        to `~/.config/opencode-copilot/frames/`. Redact `access_token` before posting.
+      render: text
+    validations:
+      required: true

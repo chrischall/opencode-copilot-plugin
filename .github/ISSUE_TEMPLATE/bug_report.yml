@@ -1,0 +1,62 @@
+name: Bug report
+description: Something does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: run `opencode-m365 doctor` and paste the output below. It
+        separates the four things that fail differently — auth, the Copilot Studio
+        agent, the proxy, and the opencode wiring.
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: opencode-m365 doctor
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: Closest symptom
+      options:
+        - Empty reply / model answers in prose instead of calling a tool
+        - Sign-in fails or keeps asking me to log in
+        - Copilot Studio agent cannot be provisioned
+        - Wrong or missing models in opencode
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: opencode-version
+    attributes:
+      label: opencode version
+      placeholder: "1.18.18"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "m365/gpt-5.5-think-deeper"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug log
+      description: |
+        Run with `M365_DEBUG=1` and attach `~/.config/opencode-copilot/debug.log`.
+        **Check it for access tokens before pasting** — `M365_TRACE=1` logs full frames.
+      render: text

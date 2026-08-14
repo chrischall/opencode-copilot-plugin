@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  pull_request:
+    # `labeled` so arming `ready-to-merge` (or `release-ready` on a release
+    # PR) triggers the deferred run.
+    types: [opened, synchronize, reopened, labeled]
+    branches: [main]
+  push:
+    branches: [main]
+
+# statuses: write is load-bearing: the gate and the final step post the
+# `ci-gated` commit status (the ruleset's required check), and
+# dependabot-triggered runs are read-only unless permissions are explicit.
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      # Deferred-merge gate (shared with the fleet), status mode: CI is
+      # deferred until auto-review arms the PR with `ready-to-merge`. An
+      # un-armed PR is blocked by a yellow `ci-gated: pending` COMMIT STATUS —
+      # this job stays green, so red runs only ever mean real failures. MUST
+      # be first; every step below carries the `run` guard.
+      - uses: chrischall/workflows/.github/actions/arm-gate@main
+        id: gate
+        with:
+          mode: status
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: 26
+          cache: npm
+      - run: npm ci
+        if: steps.gate.outputs.run == 'true'
+      - run: npm run typecheck
+        if: steps.gate.outputs.run == 'true'
+      - run: npm run build
+        if: steps.gate.outputs.run == 'true'
+      # No network and no credentials: the suite drives a stub SignalR server.
+      - run: npm test
+        if: steps.gate.outputs.run == 'true'
+
+      # Flip ci-gated to the real outcome. `always()` so a failed build posts
+      # `failure` (merge stays blocked, checks UI explains why) instead of
+      # leaving a stale `pending`.
+      - name: Report ci-gated status
+        # `steps.gate.outcome == 'failure'` matters as much as `run == 'true'`:
+        # a gate step that ERRORS (rather than deciding run=false) leaves `run`
+        # empty, which skips every step below it — including this one — so
+        # `ci-gated` keeps whatever it had and the required status never
+        # resolves. The job is already failed in that case, so the branch below
+        # posts `failure` without further help.
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          (steps.gate.outputs.run == 'true' || steps.gate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IS_FORK: ${{ steps.gate.outputs.is_fork }}
+          JOB_STATUS: ${{ job.status }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Fork PR: its token is read-only, so this POST would 403 and turn an
+          # otherwise-green run red. arm-gate deliberately posted nothing either, so
+          # `ci-gated` stays unreported and the merge stays blocked — the intended
+          # fork behaviour.
+          if [ "$IS_FORK" = "true" ]; then
+            echo "fork PR → not posting ci-gated (read-only token). The job result above is the real one; the required ci-gated context stays unreported, so the merge stays blocked until a maintainer acts."
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ]; then STATE=success; DESC="CI passed"; else STATE=failure; DESC="CI failed — see the ci job log"; fi
+          gh api "repos/$REPO/statuses/$HEAD_SHA" \
+            -f state="$STATE" -f context=ci-gated -f description="$DESC" >/dev/null
+          echo "ci-gated → $STATE"
