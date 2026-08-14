@@ -29,6 +29,11 @@ jobs:
   review:
     uses: chrischall/workflows/.github/workflows/reusable-pr-auto-review.yml@main
     with:
+      # Canary for chrischall/workflows#126. Without this, a force-push to an
+      # already-armed PR is never re-reviewed and the standing verdict keeps
+      # describing code that is no longer in the PR — which is how #7 merged here
+      # on a verdict for a change it no longer contained.
+      rereview_on_push: true
       conventions_hint: "Reverse-engineered protocol client: AGENTS.md is the source of truth for why logic lives in the proxy rather than in opencode hooks — a change moving trimming back into an opencode hook needs evidence that hook now works. Prompt text in fenced.ts/plugin.ts must stay soft: no fake role turns, no shouted absolutes (M365's Disengaged filter tracks prompt shape). Never add code that deletes a Copilot Studio agent. Tests must never require network, credentials, or live M365. Access tokens must never be logged or echoed in an error."
     secrets:
       claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
