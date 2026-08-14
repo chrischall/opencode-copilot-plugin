@@ -194,54 +194,71 @@ export function condenseSystemPrompt(
   }
 
   if (options.replaceProseWith !== undefined) {
-    // Keep two things and drop everything else:
-    //
-    //  - structured blocks (`<env>` and friends), which carry context the model needs;
-    //  - the user's own instructions. opencode injects project and global rules as
-    //    PROSE, introduced by an `Instructions from: <path>` line, so a naive
-    //    "keep only the tags" rule silently deletes a repo's AGENTS.md and the model
-    //    stops honouring rules the user can plainly see in their own file.
-    const blocks = result.match(/<([a-z_][a-z0-9_-]*)>[\s\S]*?<\/\1>/gi) ?? [];
-    result = [options.replaceProseWith, ...extractInstructionSections(result), ...blocks].join("\n\n");
+    // Drop only the harness's own persona prose. Keep the user's instructions —
+    // opencode injects project and global rules as PROSE under an
+    // `Instructions from: <path>` line — and keep the trailing structured blocks,
+    // which carry context the model needs (`<env>` and friends).
+    const { leadingBlocks, instructions, blocks } = splitSystemPrompt(result);
+    result = [options.replaceProseWith, ...leadingBlocks, instructions, blocks].filter(Boolean).join("\n\n");
   }
 
   return result.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+const BLOCK_PATTERN = /<([a-z_][a-z0-9_-]*)>[\s\S]*?<\/\1>/gi;
+
 /**
- * Pull out the user-authored instruction sections.
+ * Split a harness system prompt into: leading prose, the user's own instructions,
+ * and the structured blocks the harness appends at the end.
  *
- * A section starts at an `Instructions from: <path>` line and runs until the next
- * such line, the first structured block, or the end — matching how opencode lays the
- * system message out (harness prose, then each rules file, then `<env>` and any
- * catalogues).
+ * The boundary that matters is the **trailing** run of structured blocks, not the
+ * first tag-like line. A rules file is Markdown and routinely contains HTML or JSX —
+ * cutting at the first `<something>` would drop every rule after it, which is exactly
+ * the silent deletion this logic exists to prevent.
+ *
+ * Everything from the first `Instructions from:` line up to that trailing run is
+ * treated as the user's, verbatim, whatever it contains.
  */
-function extractInstructionSections(text: string): string[] {
-  const lines = text.split("\n");
-  const sections: string[] = [];
-  let current: string[] | undefined;
+function splitSystemPrompt(text: string): {
+  /** Structured blocks that appear ahead of the rules — opencode puts `<env>` here. */
+  leadingBlocks: string[];
+  instructions: string;
+  blocks: string;
+} {
+  const tailStart = trailingBlockStart(text);
+  const head = text.slice(0, tailStart);
+  const blocks = text.slice(tailStart).trim();
 
-  for (const line of lines) {
-    const starts = /^Instructions from:\s*\S/.test(line);
-    // A structured block always ends a prose section.
-    const isBlock = /^\s*<[a-z_][a-z0-9_-]*>/i.test(line);
+  const marker = head.search(/^Instructions from:[ \t]*\S/m);
+  const proseEnd = marker === -1 ? head.length : marker;
 
-    if (starts) {
-      if (current) sections.push(current.join("\n").trimEnd());
-      current = [line];
-      continue;
-    }
-    if (!current) continue;
-    if (isBlock) {
-      sections.push(current.join("\n").trimEnd());
-      current = undefined;
-      continue;
-    }
-    current.push(line);
+  // Harvest blocks only from the region we are about to discard. Taking them from
+  // the whole prompt would duplicate any HTML the user has in their own rules.
+  const leadingBlocks = [...head.slice(0, proseEnd).matchAll(BLOCK_PATTERN)].map((match) => match[0]);
+  const instructions = marker === -1 ? "" : head.slice(marker).trim();
+
+  return { leadingBlocks, instructions, blocks };
+}
+
+/**
+ * Offset at which the closing run of structured blocks begins.
+ *
+ * Walks matched `<tag>…</tag>` pairs from the end, extending backwards while nothing
+ * but whitespace separates them, so only blocks that genuinely trail the prompt are
+ * treated as the harness's own. Returns `text.length` when there are none.
+ */
+function trailingBlockStart(text: string): number {
+  const matches = [...text.matchAll(BLOCK_PATTERN)];
+  let start = text.length;
+
+  for (let i = matches.length - 1; i >= 0; i -= 1) {
+    const match = matches[i]!;
+    const end = match.index + match[0].length;
+    if (text.slice(end, start).trim() !== "") break;
+    start = match.index;
   }
-  if (current) sections.push(current.join("\n").trimEnd());
 
-  return sections.filter((section) => section.trim() !== "");
+  return start;
 }
 
 export interface PromptOptions {

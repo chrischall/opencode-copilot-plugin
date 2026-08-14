@@ -214,6 +214,55 @@ describe("condensing the harness system prompt", () => {
       expect(condensed).toContain("PROJECT RULE TWO");
     });
 
+    it("keeps a structured block that sits BEFORE the rules", () => {
+      // opencode puts `<env>` ahead of the instruction sections, so "keep only the
+      // trailing blocks" loses it.
+      const envFirst = [
+        "persona prose",
+        "<env>cwd=/tmp</env>",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "PROJECT RULE",
+        "trailing harness prose",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(envFirst, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("<env>cwd=/tmp</env>");
+      expect(condensed).toContain("PROJECT RULE");
+      expect(condensed).not.toContain("persona prose");
+    });
+
+    it("keeps rules that follow a tag-like line in the user's own file", () => {
+      // A rules file is Markdown and routinely contains HTML/JSX. Ending the
+      // section at the first `<word>` line would drop everything after it — the
+      // exact silent deletion this whole change exists to prevent.
+      const withHtml = [
+        "persona prose",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "<details> is fine in docs.",
+        "RULE AFTER THE TAG",
+        "<env>cwd=/tmp</env>",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(withHtml, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("RULE AFTER THE TAG");
+      expect(condensed).toContain("<details> is fine in docs.");
+    });
+
+    it("keeps rules that follow a complete tag pair in the user's own file", () => {
+      const withPair = [
+        "persona prose",
+        "Instructions from: /home/me/project/AGENTS.md",
+        "Example:",
+        "<details>",
+        "<summary>expand</summary>",
+        "</details>",
+        "RULE AFTER THE PAIR",
+        "<env>cwd=/tmp</env>",
+      ].join("\n");
+      const condensed = condenseSystemPrompt(withPair, [], { replaceProseWith: "SHORT" });
+      expect(condensed).toContain("RULE AFTER THE PAIR");
+      // ...and the user's own example is not duplicated into the preserved blocks.
+      expect(condensed.match(/<summary>expand<\/summary>/g)).toHaveLength(1);
+    });
+
     it("stops a section at the first structured block rather than swallowing it", () => {
       const condensed = condenseSystemPrompt(withRules, [], { replaceProseWith: "SHORT" });
       // <env> is preserved once, as a block — not duplicated inside the rules text.

@@ -178,9 +178,10 @@ async function handleChatCompletion(
   const tools = context.deps.lean === false ? requested : selectLeanTools(requested);
   if (tools.length !== requested.length) {
     log.info(`trimmed toolset ${requested.length} -> ${tools.length}`, tools.map((t) => t.function.name).join(","));
-    // Warn once per process rather than per turn: a drifted allowlist is a standing
-    // condition, not a per-request event, and an agent loop would flood the log.
-    const concern = context.deps.lean === false ? undefined : describeToolSelection(requested);
+    // Reached only when the trim actually removed something, which cannot happen
+    // with lean off. Warn once per process rather than per turn: a drifted
+    // allowlist is a standing condition, not a per-request event.
+    const concern = describeToolSelection(requested);
     if (concern && !warnedAboutToolSelection) {
       warnedAboutToolSelection = true;
       log.warn(concern);
