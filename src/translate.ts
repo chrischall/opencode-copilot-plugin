@@ -194,13 +194,54 @@ export function condenseSystemPrompt(
   }
 
   if (options.replaceProseWith !== undefined) {
-    // Keep the structured blocks — `<env>` and anything the project added carry
-    // context the model needs — and drop the prose around them.
+    // Keep two things and drop everything else:
+    //
+    //  - structured blocks (`<env>` and friends), which carry context the model needs;
+    //  - the user's own instructions. opencode injects project and global rules as
+    //    PROSE, introduced by an `Instructions from: <path>` line, so a naive
+    //    "keep only the tags" rule silently deletes a repo's AGENTS.md and the model
+    //    stops honouring rules the user can plainly see in their own file.
     const blocks = result.match(/<([a-z_][a-z0-9_-]*)>[\s\S]*?<\/\1>/gi) ?? [];
-    result = [options.replaceProseWith, ...blocks].join("\n\n");
+    result = [options.replaceProseWith, ...extractInstructionSections(result), ...blocks].join("\n\n");
   }
 
   return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Pull out the user-authored instruction sections.
+ *
+ * A section starts at an `Instructions from: <path>` line and runs until the next
+ * such line, the first structured block, or the end — matching how opencode lays the
+ * system message out (harness prose, then each rules file, then `<env>` and any
+ * catalogues).
+ */
+function extractInstructionSections(text: string): string[] {
+  const lines = text.split("\n");
+  const sections: string[] = [];
+  let current: string[] | undefined;
+
+  for (const line of lines) {
+    const starts = /^Instructions from:\s*\S/.test(line);
+    // A structured block always ends a prose section.
+    const isBlock = /^\s*<[a-z_][a-z0-9_-]*>/i.test(line);
+
+    if (starts) {
+      if (current) sections.push(current.join("\n").trimEnd());
+      current = [line];
+      continue;
+    }
+    if (!current) continue;
+    if (isBlock) {
+      sections.push(current.join("\n").trimEnd());
+      current = undefined;
+      continue;
+    }
+    current.push(line);
+  }
+  if (current) sections.push(current.join("\n").trimEnd());
+
+  return sections.filter((section) => section.trim() !== "");
 }
 
 export interface PromptOptions {
