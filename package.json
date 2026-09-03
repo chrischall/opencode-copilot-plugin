@@ -15,7 +15,7 @@
       "types": "./dist/plugin.d.mts",
       "import": "./dist/plugin.mjs"
     },
-    "./server": {
+    "./proxy": {
       "types": "./dist/server.d.mts",
       "import": "./dist/server.mjs"
     }
