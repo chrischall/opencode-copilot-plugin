@@ -111,4 +111,8 @@ export const M365CopilotPlugin: Plugin = async (input: PluginInput, rawOptions?:
 // The default must be the *same object* as the named export, not a wrapper around it.
 // The loader dedupes by identity before it collects, so `{ id, server: M365CopilotPlugin }`
 // and `M365CopilotPlugin` read as two plugins and start the proxy twice.
+//
+// This line is Tess Hoffman's, from #27. It did not fix #26 — that was the `./server`
+// export subpath, above — but it is right on its own merits, and #29 squashed without
+// carrying their authorship across.
 export default M365CopilotPlugin;
