@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.1...v0.2.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* **plugin:** stop shadowing opencode's ./server plugin entry ([#29](https://github.com/chrischall/opencode-copilot-plugin/issues/29)) ([615a086](https://github.com/chrischall/opencode-copilot-plugin/commit/615a0860a70b7df927b2f415c894f0b042e356b9))
+
+
+### Documentation
+
+* **plugin:** credit Tess Hoffman for the default-export change ([#31](https://github.com/chrischall/opencode-copilot-plugin/issues/31)) ([da9f33c](https://github.com/chrischall/opencode-copilot-plugin/commit/da9f33c41b22843c7a492e28d13aa098b5b89711))
+
 ## [0.2.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.0...v0.2.1) (2026-08-14)
 
 
