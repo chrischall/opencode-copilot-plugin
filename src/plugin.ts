@@ -99,7 +99,7 @@ export const M365CopilotPlugin: Plugin = async (input: PluginInput, rawOptions?:
   return hooks;
 };
 
-export default {
-  id: "opencode-m365-copilot",
-  server: M365CopilotPlugin,
-};
+// opencode 1.18.27+ loads the plugin by invoking the module's default export
+// directly. Export the plugin function as the default while preserving the
+// named export for compatibility with older loader expectations.
+export default M365CopilotPlugin;
