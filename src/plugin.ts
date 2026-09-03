@@ -1,9 +1,18 @@
 /**
  * The opencode plugin.
  *
- * opencode 1.18 loads a plugin module by its **default export**, which must be an
- * object with a `server()` function — verified against the shipped binary, which
- * rejects anything else with "must default export an object with server()".
+ * opencode does NOT load this file because it is the package's main entry. It loads
+ * whatever the package's **`./server` export subpath** resolves to, falling back to
+ * the root entry only when there is no such subpath — `./server` is opencode's name
+ * for the server-side plugin, so a package must not use it for a module of its own.
+ * We did, pointing it at the HTTP proxy, and that is what issue #26 actually was.
+ *
+ * Once it has that module the loader walks **every** export and requires each one to
+ * be either a function or an object with a `server()` function — both shapes are
+ * accepted, so the default export's shape was never the problem. One non-plugin
+ * export (the proxy's `DEFAULT_MODEL` string, in our case) is enough to fail the
+ * whole load with "Plugin export is not a function", which is why that message sent
+ * #18 and #27 hunting the wrong thing. `src/plugin-entry.test.ts` pins both rules.
  *
  * What the plugin does, in order of importance:
  *
@@ -99,7 +108,7 @@ export const M365CopilotPlugin: Plugin = async (input: PluginInput, rawOptions?:
   return hooks;
 };
 
-export default {
-  id: "opencode-m365-copilot",
-  server: M365CopilotPlugin,
-};
+// The default must be the *same object* as the named export, not a wrapper around it.
+// The loader dedupes by identity before it collects, so `{ id, server: M365CopilotPlugin }`
+// and `M365CopilotPlugin` read as two plugins and start the proxy twice.
+export default M365CopilotPlugin;
