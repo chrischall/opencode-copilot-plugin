@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@azure/msal-node": "^5.1.1",
+    "@azure/msal-node": "^6.0.0",
     "@opencode-ai/plugin": "^1.18.18",
     "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
