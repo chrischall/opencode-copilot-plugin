@@ -38,7 +38,7 @@
     "@types/ws": "^8.18.1",
     "otpauth": "^9.5.0",
     "playwright": "^1.62.1",
-    "tsdown": "^0.22.14",
+    "tsdown": "^0.23.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10",
     "ws": "^8.20.0",
