@@ -18,5 +18,20 @@ concurrency:
 jobs:
   arm:
     uses: chrischall/workflows/.github/workflows/reusable-auto-merge.yml@main
+    # CANARY for chrischall/workflows#266. A dependabot squash body that
+    # release-please cannot parse is dropped from the release silently — no
+    # block, no warning, no changelog line — because the guard that would catch
+    # it lives in the review job, which is skipped for bots.
+    #
+    # This repo is the canary because it is where the one genuinely at-risk
+    # case in 536 merged dependabot PRs actually occurred: #36, `build(deps-dev):`,
+    # which fails to parse only after GitHub hard-wraps the body at 72 columns
+    # on merge. Turning it on somewhere the failure never happens would prove
+    # only that the step is inert.
+    #
+    # Costs nothing today — `build` is a hidden type — which is the point of
+    # canarying here rather than on a repo where a mistake would matter.
+    with:
+      sanitize_release_message: true
     secrets:
       release_pat: ${{ secrets.RELEASE_PAT }}
