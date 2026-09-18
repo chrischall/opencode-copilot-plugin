@@ -1,24 +1,43 @@
 name: release-please
 
-# On every push to main, run release-please. It scans Conventional-Commit
-# messages since the last release tag and:
-#   - opens/updates a "release PR" that bumps package.json + package-lock.json
-#     and updates CHANGELOG.md when there are releasable commits (feat/fix/...);
-#   - when that release PR merges, creates a `v<VERSION>` tag + GitHub Release
-#     and the `publish` job ships the package to npm (with provenance via OIDC).
+# Thin stub: release-please itself runs in chrischall/workflows'
+# reusable-release-please.yml. The PUBLISH job stays in THIS file, because npm
+# trusted publishing binds provenance to this repo's workflow identity via
+# OIDC — that is what makes a `custom` release repo able to share the release
+# half without giving up its own publish.
 #
-# RELEASE_PAT (not GITHUB_TOKEN) is used so the release PR's events trigger
-# downstream workflows (CI). The release PR is the human review gate.
+# WHAT MOVING IT BUYS, and the reason this repo was converted at all: the
+# `republish_tag` escape hatch below. On 2026-09-14 a transient GitHub API
+# error lost release-please's `release_created` output in three sibling repos
+# AFTER each had already cut its tag and GitHub Release. Publish is gated on
+# that flag, so it skipped; and re-running does not help, because
+# release-please then correctly reports the release already exists and sets
+# the flag false again — every time. Tag cut, Release published, npm empty,
+# and no path to finish it (chrischall/workflows#283).
 #
-# A green tag does NOT mean a green publish: the two jobs are independent, and
-# a failed publish leaves a GitHub Release pointing at a version npm never got.
-# Confirm with `npm view opencode-m365-copilot version` after a release; to
-# recover, re-run this workflow — the publish step is idempotent.
+# So the old advice in this header — "to recover, re-run this workflow, the
+# publish step is idempotent" — was wrong in exactly that case. Idempotency
+# makes a re-run SAFE; it does not make it RUN. Dispatch with `republish_tag`
+# instead.
+#
+# A green tag still does not mean a green publish: the two jobs are
+# independent. Confirm with `npm view opencode-m365-copilot version`.
 
 on:
   push:
     branches: [main]
+  # `republish_tag` re-fires the publish job for a tag that ALREADY EXISTS —
+  # for a release whose tag and GitHub Release were cut but whose publish
+  # never ran. Blank on the ordinary path. It lives here rather than in the
+  # reusable workflow because a called workflow cannot declare its caller's
+  # triggers.
   workflow_dispatch:
+    inputs:
+      republish_tag:
+        description: 'Existing tag to re-publish (e.g. v1.2.3). Blank = skip publish.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -30,26 +49,17 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.version }}
-    steps:
-      - uses: googleapis/release-please-action@v5
-        id: release
-        with:
-          # RELEASE_PAT (a fine-grained PAT) lets the release PR's events trigger
-          # downstream workflows (CI on the PR) + auto-merge arming. Falls back to
-          # the built-in GITHUB_TOKEN when RELEASE_PAT isn't set — release-please
-          # still opens the PR, it just won't trigger other workflows on it.
-          token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+    uses: chrischall/workflows/.github/workflows/reusable-release-please.yml@main
+    with:
+      republish_tag: ${{ inputs.republish_tag }}
+    secrets:
+      release_pat: ${{ secrets.RELEASE_PAT }}
 
   publish:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    # `publish`, NOT `release_created`: the latter is release-please's own flag
+    # and is false on a republish, which is the one run that exists to publish.
+    if: needs.release-please.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -57,7 +67,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          # `tag`, not `tag_name`: resolved once for both paths, and empty on
+          # a republish where only the dispatch input names the tag.
+          ref: ${{ needs.release-please.outputs.tag }}
 
       - uses: actions/setup-node@v7
         with:
@@ -75,6 +87,10 @@ jobs:
       # Idempotent: skip if this version is already on the registry.
       - name: Publish to npm (with provenance)
         env:
+          # The BARE version, derived from the tag by the reusable workflow.
+          # Never chained with release-please's raw `version` as a fallback:
+          # a dispatch supplies only a tag, and the chain publishes `v1.2.3`
+          # as a version string (chrischall/workflows#283).
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           PKG=$(node -p "require('./package.json').name")
