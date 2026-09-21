@@ -40,7 +40,10 @@ do not silently move the logic back.
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only |
 | `src/config.ts` | Provider config and tool policy — the pure decisions |
-| `src/plugin.ts` | The opencode plugin. Thin: starts the proxy, registers the provider |
+| `src/plugin.ts` | The entry. One default export carrying both plugin APIs — nothing else |
+| `src/plugin-v1.ts` | opencode 1's `server()`: the `config` hook and `dispose` |
+| `src/plugin-v2.ts` | opencode 2's `setup()`: provider/model transforms and the title hook |
+| `src/runtime.ts` | What both halves share: resolve options, start the proxy |
 | `src/cli.ts` | `opencode-m365 login \| setup \| serve \| doctor` |
 
 ## Testing
@@ -59,6 +62,25 @@ direct read of `frames`.
 For an end-to-end check through real opencode without touching Microsoft, run the proxy
 against the stub and point the plugin at it with the `baseUrl` option.
 
+## Supporting both opencode plugin APIs
+
+`src/plugin.ts` default-exports a single object with `id`, `setup()` and `server()`.
+opencode 1 takes `server()`, opencode 2 takes `setup()`, and the two implementations
+share nothing but `runtime.ts`. Three rules hold it together, all pinned in
+`src/plugin-entry.test.ts`:
+
+- **That module exports `default` and nothing else.** When opencode 1's object
+  detection declines, it falls back to walking every export, and a second
+  plugin-shaped export there starts the proxy twice.
+- **The two halves travel together.** In opencode 1's detector, `id` alone arms
+  detection — so a default export carrying `id` but no `server()` does not get skipped,
+  it throws. You cannot ship the v2 half on its own.
+- **No `tui` key.** The same detector rejects `server` and `tui` on one object.
+
+Neither plugin API package is a runtime dependency. Both are type-only imports and both
+must stay in `tsdown.config.ts`'s `external`: miss `@opencode/plugin` there and the dts
+bundler inlines `@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB.
+
 ## Things that will bite you
 
 - **Disengaged is not rate limiting.** Empty content, no error. Retrying makes it worse
@@ -75,7 +97,16 @@ against the stub and point the plugin at it with the `baseUrl` option.
   `fenced.ts` or `plugin.ts`, lean softer, not harder. There are tests asserting the
   absence of jailbreak shapes — they are there on purpose.
 - **`small_model` must never reach M365.** The throttle counts conversations started;
-  titling every session on the main model is the fastest route into it.
+  titling every session on the main model is the fastest route into it. opencode 2 has
+  no `small_model`: there the plugin marks the title request with
+  `AUX_REQUEST_KIND_HEADER` and the proxy answers it locally. Two mechanisms, one
+  guarantee — change one and check the other.
+- **opencode 2 swallows plugin load failures.** A wrong entry shape, or a catalog record
+  that has drifted out of schema, is not an error — it is a plugin that silently never
+  loads. That is why `config.test.ts` checks our hand-built provider and model records
+  against the real constructors in `@opencode/plugin`.
+- **opencode 2 refuses a file path in `plugins`.** It wants a directory, and says so
+  only as a `configured plugin path must be a directory` warning in the server log.
 
 ## Provenance
 

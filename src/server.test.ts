@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem, throttling, type StubServer } from "../test/stub-copilot.js";
 import { AuthRequiredError } from "./auth.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
-import { startServer, type ProxyHandle } from "./server.js";
+import { AUX_REQUEST_KIND_HEADER, startServer, type ProxyHandle } from "./server.js";
 
 function fakeToken(oid = "oid", tid = "tid"): string {
   const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -257,6 +257,43 @@ describe("the local titler", () => {
     expect(text).toContain("data: ");
     expect(text).toContain("[DONE]");
     expect(stub.connections).toHaveLength(0);
+  });
+
+  it("also answers locally when the request is flagged as a title request", async () => {
+    // opencode 2 has no `small_model`, so the v2 plugin cannot point titling at the
+    // local model by id. It flags the request kind on a header instead, and the
+    // decision of what M365 actually receives stays here in the proxy.
+    stub = await startStubCopilot();
+    const { url } = await start();
+    const response = await fetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", [AUX_REQUEST_KIND_HEADER]: "title" },
+      body: JSON.stringify({
+        model: DEFAULT_MODEL,
+        messages: [{ role: "user", content: "refactor the auth middleware" }],
+      }),
+    });
+    const body: any = await response.json();
+    expect(body.choices[0].message.content.toLowerCase()).toContain("refactor");
+    expect(stub.connections).toHaveLength(0);
+  });
+
+  it("does not hijack a normal turn that carries some other request kind", async () => {
+    // Compaction and generate are real model work; only titling opens a conversation
+    // we cannot afford. See models.ts for why the distinction matters.
+    stub = await startStubCopilot({ respond: () => [botMessage("summary"), completion()] });
+    const { url } = await start();
+    const response = await fetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", [AUX_REQUEST_KIND_HEADER]: "compaction" },
+      body: JSON.stringify({
+        model: DEFAULT_MODEL,
+        messages: [{ role: "user", content: "summarise the conversation" }],
+      }),
+    });
+    const body: any = await response.json();
+    expect(body.choices[0].message.content).toBe("summary");
+    expect(stub.connections).toHaveLength(1);
   });
 });
 

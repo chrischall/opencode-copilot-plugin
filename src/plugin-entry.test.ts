@@ -6,7 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
 /**
- * Regression cover for issue #26 — `Plugin export is not a function`.
+ * Regression cover for issue #26 — `Plugin export is not a function` — and for the
+ * dual v1/v2 entry shape that replaced it.
+ *
+ * ## v1, the every-export fallback
  *
  * The error names the default export, which sent two attempts (#18, #27) after the
  * wrong thing. What opencode actually does, decompiled from the 1.18.27 binary:
@@ -31,6 +34,43 @@ import { beforeAll, describe, expect, it } from "vitest";
  *    what surfaces.
  * 2. It walks *every* export, so one non-plugin export anywhere in that module
  *    breaks loading, and two distinct plugin-shaped exports load the plugin twice.
+ *
+ * ## v1, the object-entrypoint path
+ *
+ * A second path runs *first*, and it is the one that lets a single module serve both
+ * plugin APIs. Decompiled from the 1.18.31 binary (`rQ`, called as
+ * `rQ(mod, spec, "server", "detect")`):
+ *
+ * ```js
+ * const def = mod.default;
+ * if (!isObject(def)) { if (mode === "detect") return; throw ... }
+ * if (mode === "detect" && !("id" in def) && !("server" in def) && !("tui" in def)) return;
+ * const server = "server" in def ? def.server : undefined;
+ * const tui    = "tui"    in def ? def.tui    : undefined;
+ * if (server !== undefined && !isFn(server)) throw TypeError(`... invalid server export`);
+ * if (tui    !== undefined && !isFn(tui))    throw TypeError(`... invalid tui export`);
+ * if (server !== undefined && tui !== undefined) throw TypeError(`... server() or tui(), not both`);
+ * if (kind === "server" && server === undefined)
+ *   throw TypeError(`... must default export an object with server()`);
+ * return def;
+ * ```
+ *
+ * The trap is the first `in` check: **`id` alone arms detection**. A bare v2 default
+ * export (`{ id, setup }`) therefore does not get politely skipped by a v1 opencode —
+ * it reaches the last line and throws. The combined object is the only shape that
+ * survives both loaders, which is why it is asserted rather than assumed.
+ *
+ * opencode's docs say the object form is "supported in OpenCode 1.18.29". Measured
+ * against the real darwin-arm64 binaries, 1.18.0 — the bottom of our declared peer
+ * range — already carries the identical `(mod, spec, "server", "detect")` call site
+ * and the same `"id" in def` short-circuit, as does 1.18.28. Both paths below are
+ * therefore live across the whole range we support, and both are asserted.
+ *
+ * ## v2
+ *
+ * opencode 2 validates the module against `{ default: { id, setup } | { id, effect } }`
+ * and ignores `server()`. Its failures are swallowed, so a wrong shape here is a
+ * plugin that silently never loads.
  */
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -70,6 +110,43 @@ const collect = (mod: Record<string, unknown>) => {
   return plugins;
 };
 
+/** opencode 1's object-entrypoint detection, for `kind: "server"`. */
+const detectObjectEntry = (mod: Record<string, unknown>) => {
+  const def = mod.default;
+  if (!def || typeof def !== "object") return undefined;
+  const has = (key: string) => key in (def as Record<string, unknown>);
+  if (!has("id") && !has("server") && !has("tui")) return undefined;
+
+  const entry = def as { id?: unknown; server?: unknown; tui?: unknown };
+  if (entry.server !== undefined && !isFn(entry.server)) {
+    throw new TypeError("Plugin has invalid server export");
+  }
+  if (entry.tui !== undefined && !isFn(entry.tui)) {
+    throw new TypeError("Plugin has invalid tui export");
+  }
+  if (entry.server !== undefined && entry.tui !== undefined) {
+    throw new TypeError("Plugin must default export either server() or tui(), not both");
+  }
+  if (entry.server === undefined) {
+    throw new TypeError("Plugin must default export an object with server()");
+  }
+  return entry;
+};
+
+/** opencode 2's schema for the plugin module, in the shape its decoder accepts. */
+const decodeV2Entry = (mod: Record<string, unknown>) => {
+  const def = mod.default;
+  if (!def || typeof def !== "object") throw new TypeError("default export is not an object");
+  const entry = def as { id?: unknown; setup?: unknown; effect?: unknown };
+  if (typeof entry.id !== "string" || entry.id.trim() === "") {
+    throw new TypeError("default export has no id");
+  }
+  if (!isFn(entry.setup) && !isFn(entry.effect)) {
+    throw new TypeError("default export has neither setup() nor effect()");
+  }
+  return entry;
+};
+
 describe("the entry opencode loads", () => {
   let entry: string;
   let namespace: Record<string, unknown>;
@@ -89,13 +166,46 @@ describe("the entry opencode loads", () => {
     expect(entry).toBe(path.join(repoRoot, "dist/plugin.mjs"));
   });
 
-  it("survives the loader's every-export check", () => {
-    expect(() => collect(namespace)).not.toThrow();
+  describe("opencode 1, the every-export fallback", () => {
+    it("survives the loader's every-export check", () => {
+      expect(() => collect(namespace)).not.toThrow();
+    });
+
+    it("registers the plugin exactly once", () => {
+      // This path is reached only when detection declines, but it still walks every
+      // export and dedupes by identity, so a second plugin-shaped export would start
+      // the proxy twice. One export is the safe answer.
+      expect(collect(namespace)).toHaveLength(1);
+      expect(Object.keys(namespace)).toEqual(["default"]);
+    });
   });
 
-  it("registers the plugin exactly once", () => {
-    // The named export and the default must be the *same* object, or the loader's
-    // identity dedupe misses them and starts the proxy twice.
-    expect(collect(namespace)).toHaveLength(1);
+  describe("opencode 1, the object-entrypoint path", () => {
+    it("is detected as an object entrypoint with a server()", () => {
+      const detected = detectObjectEntry(namespace);
+      expect(detected).toBeDefined();
+      expect(isFn(detected!.server)).toBe(true);
+    });
+
+    it("carries the id the loader registers it under", () => {
+      // A path-sourced plugin is rejected outright without one.
+      expect(typeof detectObjectEntry(namespace)!.id).toBe("string");
+      expect(detectObjectEntry(namespace)!.id).not.toBe("");
+    });
+
+    it("does not also export tui(), which the loader rejects alongside server()", () => {
+      expect(namespace.default).not.toHaveProperty("tui");
+    });
+  });
+
+  describe("opencode 2", () => {
+    it("decodes as a v2 plugin definition", () => {
+      const entry = decodeV2Entry(namespace);
+      expect(isFn(entry.setup)).toBe(true);
+    });
+
+    it("uses the same id under both APIs", () => {
+      expect(decodeV2Entry(namespace).id).toBe(detectObjectEntry(namespace)!.id);
+    });
   });
 });

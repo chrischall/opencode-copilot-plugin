@@ -13,6 +13,17 @@ import { findShellTool, type ToolDef } from "./fenced.js";
 export const PROVIDER_ID = "m365";
 
 /**
+ * The plugin's own id.
+ *
+ * opencode 2 requires one, scopes the plugin's storage by it, and names the plugin
+ * by it in `plugin list` and diagnostics. opencode 1 from 1.18.29 registers an object
+ * entrypoint under it too, so the two APIs must agree — `plugin-entry.test.ts` checks
+ * that they do. Changing it is not cosmetic: it orphans anything stored under the old
+ * one.
+ */
+export const PLUGIN_ID = "m365-copilot";
+
+/**
  * The measured point at which M365's Disengaged filter starts firing.
  *
  * From the protocol notes: ~1 tool is fine, ~12 is borderline (disengages once,
@@ -126,7 +137,13 @@ export interface PluginOptions {
   lean: boolean;
   /** Set `model` when the user has not chosen one. */
   setDefaultModel: boolean;
-  /** Point `small_model` at the local titler so title generation never hits M365. */
+  /**
+   * Keep session-title generation off M365.
+   *
+   * opencode 1 has a `small_model` setting, so we point that at the local titler.
+   * opencode 2 dropped it, so the v2 plugin flags the title request instead and the
+   * proxy answers it locally. Same guarantee, two mechanisms.
+   */
   setSmallModel: boolean;
   /**
    * Replace the harness's prose system prompt with a lean one.
@@ -217,6 +234,85 @@ export function buildProviderConfig(baseUrl: string): ProviderConfig {
 }
 
 /**
+ * opencode 2's `Provider.Info`, with its branded id types written as plain strings.
+ *
+ * Declared here rather than imported so the published package carries no runtime
+ * dependency on `@opencode/plugin`. `config.test.ts` checks these records against
+ * that package's own constructors, which is what catches drift — v2 swallows plugin
+ * load failures, so a record that has fallen out of shape would otherwise show up
+ * only as a provider that silently never appears.
+ */
+export interface ProviderInfoV2 {
+  id: string;
+  name: string;
+  activation: "auto" | "enabled" | "disabled";
+  package: string;
+  settings?: Record<string, unknown>;
+}
+
+/** opencode 2's `Model.Info`, same caveat as {@link ProviderInfoV2}. */
+export interface ModelInfoV2 {
+  id: string;
+  modelID: string;
+  providerID: string;
+  name: string;
+  capabilities: { tools: boolean; input: string[]; output: string[] };
+  variants: never[];
+  time: { released: number };
+  cost: Array<{ input: number; output: number; cache: { read: number; write: number } }>;
+  status: "active";
+  enabled: boolean;
+  limit: { context: number; output: number };
+}
+
+/** The opencode 2 provider record pointing at our local OpenAI-compatible proxy. */
+export function buildProviderInfo(baseUrl: string): ProviderInfoV2 {
+  return {
+    id: PROVIDER_ID,
+    name: "Microsoft 365 Copilot",
+    // `auto` waits for a credential to arrive on an integration we never register,
+    // so the provider would be present and permanently unusable.
+    activation: "enabled",
+    // v2 ships the openai-compatible driver, where v1 named an npm package for
+    // opencode to install. Same driver, no install.
+    package: "@opencode/ai/providers/openai-compatible",
+    settings: {
+      baseURL: baseUrl,
+      // Loopback and unauthenticated, but the driver still wants a bearer value.
+      apiKey: "m365-local",
+      // A reasoning tone takes 10-30s, and a turn can retry once behind the scenes.
+      // opencode's default 5 minutes is not always enough.
+      timeout: 900_000,
+    },
+  };
+}
+
+/** The opencode 2 model records, one per advertised model. */
+export function buildModelInfos(): ModelInfoV2[] {
+  return MODELS.map((model) => ({
+    id: model.id,
+    modelID: model.id,
+    providerID: PROVIDER_ID,
+    name: model.name,
+    capabilities: {
+      // Without this opencode will not send `tools` at all, and the whole
+      // fenced-tool-call path never gets exercised.
+      tools: !isLocalModel(model.id),
+      // The proxy carries text only; an attachment has nowhere to go.
+      input: ["text"],
+      output: ["text"],
+    },
+    variants: [],
+    time: { released: 0 },
+    // Billed to the M365 licence, not per token.
+    cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
+    status: "active",
+    enabled: true,
+    limit: model.limit,
+  }));
+}
+
+/**
  * Mutate opencode's in-memory config during the plugin's `config` hook.
  *
  * Deliberately additive: anything the user set explicitly wins. We are a plugin
@@ -262,26 +358,82 @@ function usesOurProvider(config: Record<string, any>): boolean {
  *
  * `pluginRef` is either the npm package name or an absolute path to the built
  * plugin — the CLI uses the latter for a local checkout.
+ *
+ * Both keys are written. They are genuinely different settings: opencode 1 reads
+ * `plugin`, opencode 2 reads `plugins`, and the entry forms differ too — v1 takes a
+ * `[spec, options]` tuple where v2 takes `{ package, options }`. Each version drops
+ * the key it does not know rather than complaining, verified against 1.18.31, which
+ * resolved a config carrying `plugins` with no diagnostic and simply left it out. So
+ * one file can serve both, which is the whole point of the dual entry in `plugin.ts`.
+ *
+ * They also need different *references* for a local checkout. opencode 1 wants the
+ * built entrypoint; opencode 2 insists on a directory and drops a file path with
+ * `configured plugin path must be a directory` — measured against 2.0.11, and since
+ * v2 swallows plugin load failures nothing else reports it. `pluginDir` is that
+ * directory. An npm install needs neither, because the package name serves both.
  */
 export function mergeOpencodeConfig(
   existing: Record<string, any>,
-  opts: { pluginRef: string },
+  opts: { pluginRef: string; pluginDir?: string },
 ): Record<string, any> {
   const merged: Record<string, any> = { ...existing };
   merged.$schema ??= "https://opencode.ai/config.json";
+  const pluginDir = opts.pluginDir ?? opts.pluginRef;
 
-  const plugins: unknown[] = Array.isArray(merged.plugin) ? [...merged.plugin] : [];
-  // Drop any earlier reference to *this* plugin — including one pointing at a stale
-  // build path — before adding the current one, so re-running setup after moving the
-  // checkout does not leave opencode trying to load a file that no longer exists.
-  const kept = plugins.filter((entry) => {
-    const name = typeof entry === "string" ? entry : Array.isArray(entry) ? String(entry[0]) : "";
-    return !isOurPluginRef(name, opts.pluginRef);
-  });
-  kept.push(opts.pluginRef);
-  merged.plugin = kept;
+  const v1 = withOurRef(merged.plugin, opts.pluginRef);
+  // A stale v2 entry is a bare directory, so its name says nothing about us — but it
+  // is the directory that *contains* the stale v1 entrypoint we just dropped, and
+  // that does. Anything else is somebody else's plugin and stays.
+  const v2 = withOurRef(merged.plugins, pluginDir, v1.dropped);
 
+  merged.plugin = [...v1.kept, opts.pluginRef];
+  merged.plugins = [...v2.kept, pluginDir];
   return merged;
+}
+
+/**
+ * Split a plugin list into the entries that are ours and the ones that are not.
+ *
+ * Dropping the earlier reference to ourselves — including one pointing at a stale
+ * build path — is what stops a re-run of setup, after the checkout moved, from
+ * leaving opencode trying to load a file that no longer exists.
+ */
+function withOurRef(
+  existing: unknown,
+  pluginRef: string,
+  containing: readonly string[] = [],
+): { kept: unknown[]; dropped: string[] } {
+  const entries: unknown[] = Array.isArray(existing) ? [...existing] : [];
+  const kept: unknown[] = [];
+  const dropped: string[] = [];
+
+  for (const entry of entries) {
+    const spec = specifierOf(entry);
+    const ours = isOurPluginRef(spec, pluginRef) || containing.some((path) => isWithin(spec, path));
+    if (ours) dropped.push(spec);
+    else kept.push(entry);
+  }
+
+  return { kept, dropped };
+}
+
+/** Is `path` inside the directory `dir`? Both are absolute, or neither matches. */
+function isWithin(dir: string, path: string): boolean {
+  if (!dir || !path) return false;
+  const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+  return path.startsWith(prefix);
+}
+
+/** The package-or-path out of any entry form either version accepts. */
+function specifierOf(entry: unknown): string {
+  if (typeof entry === "string") return entry;
+  // v1's tuple form, `[spec, options]`.
+  if (Array.isArray(entry)) return String(entry[0] ?? "");
+  // v2's object form, `{ package, options }`.
+  if (entry && typeof entry === "object" && "package" in entry) {
+    return String((entry as { package: unknown }).package ?? "");
+  }
+  return "";
 }
 
 /**

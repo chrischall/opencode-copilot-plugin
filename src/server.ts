@@ -36,6 +36,17 @@ const log = createLogger("server");
 /** See the warning in `handleChatCompletion`; this keeps it to once per process. */
 let warnedAboutToolSelection = false;
 
+/**
+ * Header a harness uses to declare what an auxiliary request is *for*.
+ *
+ * Node lowercases incoming header names, so this must stay lowercase to match.
+ *
+ * Only `title` is acted on. Compaction and generation are real model work and belong
+ * on the real model; titling is the one auxiliary request that would open a second
+ * M365 conversation per session, which is precisely the throttle signature.
+ */
+export const AUX_REQUEST_KIND_HEADER = "x-m365-request-kind";
+
 export interface ServerDeps {
   /** Supplies a Sydney chat token. */
   getToken: () => Promise<string>;
@@ -188,8 +199,10 @@ async function handleChatCompletion(
     }
   }
 
-  // The titler never touches M365 — see models.ts for why that matters.
-  if (isLocalModel(model.id)) {
+  // The titler never touches M365 — see models.ts for why that matters. A harness
+  // that cannot select the titler by id says so on the header instead; opencode 2
+  // dropped `small_model`, and its title hook cannot change the model.
+  if (isLocalModel(model.id) || request.headers[AUX_REQUEST_KIND_HEADER] === "title") {
     respondWithTitle(response, body, model.id);
     return;
   }
