@@ -1,3 +1,5 @@
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
@@ -325,8 +327,10 @@ describe("merging into an on-disk opencode.json", () => {
       },
       { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
     );
-    expect(merged.plugin).toEqual(["/new/checkout/dist/plugin.mjs"]);
-    expect(merged.plugins).toEqual(["/new/checkout"]);
+    expect(merged.plugin).toEqual([["/new/checkout/dist/plugin.mjs", { lean: false }]]);
+    expect(merged.plugins).toEqual([
+      { package: "/new/checkout", options: { lean: false } },
+    ]);
   });
 
   it("does not mistake an unrelated directory for a stale copy of us", () => {
@@ -348,6 +352,45 @@ describe("merging into an on-disk opencode.json", () => {
     );
     expect(merged.plugin).toEqual(["/checkout/dist/plugin.mjs"]);
     expect(merged.plugins).toEqual(["/checkout"]);
+  });
+
+  it("keeps the options the user set when it replaces our own entry", () => {
+    // A `setup` re-run must not silently undo `{ "lean": false }`. Both entry forms
+    // carry options, and both are preserved.
+    const merged = mergeOpencodeConfig(
+      {
+        plugin: [["opencode-m365-copilot", { lean: false }]],
+        plugins: [{ package: "opencode-m365-copilot", options: { lean: false } }],
+      },
+      { pluginRef: "opencode-m365-copilot" },
+    );
+    expect(merged.plugin).toEqual([["opencode-m365-copilot", { lean: false }]]);
+    expect(merged.plugins).toEqual([
+      { package: "opencode-m365-copilot", options: { lean: false } },
+    ]);
+  });
+
+  it("carries options across a moved checkout, onto the new reference", () => {
+    const merged = mergeOpencodeConfig(
+      {
+        plugin: [["/old/checkout/dist/plugin.mjs", { leanSystemPrompt: true }]],
+        plugins: [{ package: "/old/checkout", options: { leanSystemPrompt: true } }],
+      },
+      { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
+    );
+    expect(merged.plugin).toEqual([["/new/checkout/dist/plugin.mjs", { leanSystemPrompt: true }]]);
+    expect(merged.plugins).toEqual([
+      { package: "/new/checkout", options: { leanSystemPrompt: true } },
+    ]);
+  });
+
+  it("stays a bare specifier when there are no options to keep", () => {
+    const merged = mergeOpencodeConfig(
+      { plugin: ["opencode-m365-copilot"], plugins: ["opencode-m365-copilot"] },
+      { pluginRef: "opencode-m365-copilot" },
+    );
+    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
+    expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
   });
 
   it("uses the package name for both keys when installed from npm", () => {
@@ -415,25 +458,52 @@ describe("the v2 catalog entry", () => {
 });
 
 describe("the v2 catalog entry, against opencode 2's own schema", () => {
-  // These assert our hand-built records against the real constructors in
-  // `@opencode/plugin`, which is a **dev** dependency only: the published package
-  // declares no runtime dependencies, and v2's loader swallows load failures, so a
-  // record that drifts out of shape would otherwise fail completely silently.
-  it("supplies every key opencode 2 requires of a provider", async () => {
-    const { Provider } = await import("@opencode/plugin");
-    const required = Object.keys(Provider.Info.empty(Provider.ID.make(PROVIDER_ID)));
-    expect(Object.keys(buildProviderInfo("http://127.0.0.1:1/v1"))).toEqual(
-      expect.arrayContaining(required),
-    );
+  // These decode our hand-built records through opencode 2's real schemas. We build
+  // the records from plain literals so the published package needs no runtime
+  // dependency on `@opencode/plugin` — it is a **dev** dependency only — and v2's
+  // loader swallows plugin load failures, so a record that has drifted out of shape
+  // would otherwise surface as nothing at all: a provider that never appears.
+  //
+  // Decoding, rather than comparing key names, is what checks the nested
+  // `capabilities`/`cost`/`limit` shapes and the `activation`/`status` enums.
+
+  /**
+   * opencode 2's schemas are built with the `effect` that `@opencode/schema` itself
+   * resolves. Our root `effect` is a different, older copy (pinned by
+   * `@opencode-ai/plugin`), and decoding a schema with a mismatched copy fails on
+   * every field — so reach the matching one deliberately rather than by luck.
+   */
+  const loadSchema = async () => {
+    const schemaEntry = fileURLToPath(import.meta.resolve("@opencode/schema/model"));
+    const effectPath = createRequire(schemaEntry).resolve("effect");
+    const { Schema } = (await import(pathToFileURL(effectPath).href)) as {
+      Schema: { decodeUnknownSync: (schema: unknown) => (input: unknown) => unknown };
+    };
+    return Schema;
+  };
+
+  it("decodes as a provider opencode 2 accepts", async () => {
+    const [Schema, { Provider }] = await Promise.all([loadSchema(), import("@opencode/plugin")]);
+    const decode = Schema.decodeUnknownSync(Provider.Info);
+    expect(() => decode(buildProviderInfo("http://127.0.0.1:4319/v1"))).not.toThrow();
   });
 
-  it("supplies every key opencode 2 requires of a model", async () => {
-    const { Model, Provider } = await import("@opencode/plugin");
-    const required = Object.keys(
-      Model.Info.default(Provider.ID.make(PROVIDER_ID), Model.ID.make(DEFAULT_MODEL)),
-    );
+  it("decodes every model opencode 2 would be offered", async () => {
+    const [Schema, { Model }] = await Promise.all([loadSchema(), import("@opencode/plugin")]);
+    const decode = Schema.decodeUnknownSync(Model.Info);
     for (const model of buildModelInfos()) {
-      expect(Object.keys(model)).toEqual(expect.arrayContaining(required));
+      expect(() => decode(model), `model ${model.id} is not a valid Model.Info`).not.toThrow();
     }
+  });
+
+  it("would notice a record that has drifted out of shape", async () => {
+    // Guards the guard: a decode that accepts anything would pass the two above
+    // while telling us nothing.
+    const [Schema, { Model }] = await Promise.all([loadSchema(), import("@opencode/plugin")]);
+    const decode = Schema.decodeUnknownSync(Model.Info);
+    const [model] = buildModelInfos();
+    expect(() => decode({ ...model, status: "retired" })).toThrow();
+    expect(() => decode({ ...model, limit: { context: "lots", output: 1 } })).toThrow();
+    expect(() => decode({ ...model, capabilities: { tools: true, input: ["text"] } })).toThrow();
   });
 });

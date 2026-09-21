@@ -287,7 +287,21 @@ export function buildProviderInfo(baseUrl: string): ProviderInfoV2 {
   };
 }
 
-/** The opencode 2 model records, one per advertised model. */
+/**
+ * The opencode 2 model records, one per advertised model.
+ *
+ * Note what is *not* here: v1's per-model `reasoning` flag. `Model.Info` has no
+ * equivalent field — opencode 2 expresses reasoning as selectable `variants` built
+ * from a provider's `reasoning_options`, which is a different thing. Our reasoning
+ * tones are not variants of a base model; each is its own id, because that is how
+ * M365 exposes them. Setting a stray `reasoning: true` would decode without
+ * complaint and then be dropped: the catalog rebuild copies `capabilities` field by
+ * field and keeps nothing else.
+ *
+ * Nothing is lost by the omission. The flag is a catalog hint about parsing a
+ * reasoning stream, and the proxy emits none — a "think deeper" tone simply takes
+ * 10-30s and returns ordinary text.
+ */
 export function buildModelInfos(): ModelInfoV2[] {
   return MODELS.map((model) => ({
     id: model.id,
@@ -386,8 +400,11 @@ export function mergeOpencodeConfig(
   // that does. Anything else is somebody else's plugin and stays.
   const v2 = withOurRef(merged.plugins, pluginDir, v1.dropped);
 
-  merged.plugin = [...v1.kept, opts.pluginRef];
-  merged.plugins = [...v2.kept, pluginDir];
+  // Options ride on the entry, so replacing ours would otherwise silently undo a
+  // `{ "lean": false }` the user set by hand. The two versions spell the entry
+  // differently: v1 takes a `[spec, options]` tuple, v2 a `{ package, options }`.
+  merged.plugin = [...v1.kept, v1.options ? [opts.pluginRef, v1.options] : opts.pluginRef];
+  merged.plugins = [...v2.kept, v2.options ? { package: pluginDir, options: v2.options } : pluginDir];
   return merged;
 }
 
@@ -402,19 +419,37 @@ function withOurRef(
   existing: unknown,
   pluginRef: string,
   containing: readonly string[] = [],
-): { kept: unknown[]; dropped: string[] } {
+): { kept: unknown[]; dropped: string[]; options?: Record<string, unknown> } {
   const entries: unknown[] = Array.isArray(existing) ? [...existing] : [];
   const kept: unknown[] = [];
   const dropped: string[] = [];
+  let options: Record<string, unknown> | undefined;
 
   for (const entry of entries) {
     const spec = specifierOf(entry);
     const ours = isOurPluginRef(spec, pluginRef) || containing.some((path) => isWithin(spec, path));
-    if (ours) dropped.push(spec);
-    else kept.push(entry);
+    if (!ours) {
+      kept.push(entry);
+      continue;
+    }
+    dropped.push(spec);
+    // Last one wins, which matters only for a config that somehow lists us twice.
+    options = optionsOf(entry) ?? options;
   }
 
-  return { kept, dropped };
+  return { kept, dropped, ...(options ? { options } : {}) };
+}
+
+/** The options out of any entry form either version accepts, if it carries some. */
+function optionsOf(entry: unknown): Record<string, unknown> | undefined {
+  const raw = Array.isArray(entry)
+    ? entry[1]
+    : entry && typeof entry === "object" && "options" in entry
+      ? (entry as { options: unknown }).options
+      : undefined;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const options = raw as Record<string, unknown>;
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 /** Is `path` inside the directory `dir`? Both are absolute, or neither matches. */

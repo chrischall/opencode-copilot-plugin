@@ -94,7 +94,7 @@ bundler inlines `@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB
   silently routes to GPT. Attach it only for tool turns.
 - **Prompt shape, not size, trips the filter.** 500k tokens of benign input is fine; a
   shouty ALL-CAPS prompt with fake role turns is not. When editing any prompt in
-  `fenced.ts` or `plugin.ts`, lean softer, not harder. There are tests asserting the
+  `fenced.ts` or `runtime.ts`, lean softer, not harder. There are tests asserting the
   absence of jailbreak shapes — they are there on purpose.
 - **`small_model` must never reach M365.** The throttle counts conversations started;
   titling every session on the main model is the fastest route into it. opencode 2 has

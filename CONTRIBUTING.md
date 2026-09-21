@@ -33,7 +33,7 @@ title. Make the two match, or add a second commit so the title wins.
 
 ## Things that need extra care
 
-- **Prompt text** in `src/fenced.ts` and `src/plugin.ts`. M365's Disengaged filter tracks
+- **Prompt text** in `src/fenced.ts` and `src/runtime.ts`. M365's Disengaged filter tracks
   prompt *shape*, not size — fake `<system>`/`<user>` turns and shouted absolutes read as
   manipulation. When in doubt, lean softer. There are tests asserting the absence of those
   shapes; they are deliberate.
