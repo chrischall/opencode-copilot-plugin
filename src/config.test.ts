@@ -7,7 +7,9 @@ import {
   LEAN_TOOLS,
   PROVIDER_ID,
   applyPluginConfig,
+  buildModelInfos,
   buildProviderConfig,
+  buildProviderInfo,
   buildToolProfile,
   describeToolSelection,
   mergeOpencodeConfig,
@@ -284,5 +286,154 @@ describe("merging into an on-disk opencode.json", () => {
   it("does not touch unrelated settings", () => {
     const merged = mergeOpencodeConfig({ theme: "gruvbox" }, { pluginRef: "opencode-m365-copilot" });
     expect(merged.theme).toBe("gruvbox");
+  });
+
+  it("writes both the v1 and the v2 key, so one file serves either opencode", () => {
+    // They are different settings with different names, and each version silently
+    // drops the one it does not know: verified against 1.18.31, which resolved a
+    // config carrying `plugins` without a diagnostic and simply left it out.
+    const merged = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
+    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
+    expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
+  });
+
+  it("is idempotent across both keys", () => {
+    const once = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
+    const twice = mergeOpencodeConfig(once, { pluginRef: "opencode-m365-copilot" });
+    expect(twice.plugins).toEqual(["opencode-m365-copilot"]);
+  });
+
+  it("keeps other people's v2 plugins, including the object form", () => {
+    const merged = mergeOpencodeConfig(
+      { plugins: ["opencode-wakatime", { package: "@acme/plugin", options: { strict: true } }] },
+      { pluginRef: "opencode-m365-copilot" },
+    );
+    expect(merged.plugins).toContainEqual("opencode-wakatime");
+    expect(merged.plugins).toContainEqual({ package: "@acme/plugin", options: { strict: true } });
+    expect(merged.plugins).toContainEqual("opencode-m365-copilot");
+  });
+
+  it("replaces a stale reference in both keys when the checkout has moved", () => {
+    // The real shape of a re-run after moving a checkout: setup wrote both keys last
+    // time, so both are stale. The v2 entry is a bare directory whose name says
+    // nothing about us — what identifies it is that it contains the v1 entrypoint we
+    // are already dropping.
+    const merged = mergeOpencodeConfig(
+      {
+        plugin: [["/old/checkout/dist/plugin.mjs", { lean: false }]],
+        plugins: [{ package: "/old/checkout", options: { lean: false } }],
+      },
+      { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
+    );
+    expect(merged.plugin).toEqual(["/new/checkout/dist/plugin.mjs"]);
+    expect(merged.plugins).toEqual(["/new/checkout"]);
+  });
+
+  it("does not mistake an unrelated directory for a stale copy of us", () => {
+    const merged = mergeOpencodeConfig(
+      { plugin: [], plugins: [{ package: "/somewhere/else" }] },
+      { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" },
+    );
+    expect(merged.plugins).toEqual([{ package: "/somewhere/else" }, "/checkout"]);
+  });
+
+  it("gives opencode 2 a directory, because it rejects a file path outright", () => {
+    // Measured against 2.0.11: a `plugins` entry pointing at a file is dropped with
+    // `configured plugin path must be a directory`, and — since v2 swallows plugin
+    // load failures — nothing else says so. opencode 1 wants the built entrypoint,
+    // so the two keys genuinely need different references for a local checkout.
+    const merged = mergeOpencodeConfig(
+      {},
+      { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" },
+    );
+    expect(merged.plugin).toEqual(["/checkout/dist/plugin.mjs"]);
+    expect(merged.plugins).toEqual(["/checkout"]);
+  });
+
+  it("uses the package name for both keys when installed from npm", () => {
+    const merged = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
+    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
+    expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
+  });
+});
+
+describe("the v2 catalog entry", () => {
+  const baseUrl = "http://127.0.0.1:4319/v1";
+  const info = buildProviderInfo(baseUrl);
+  const models = buildModelInfos();
+
+  it("registers a provider opencode 2 will actually talk to", () => {
+    expect(info.id).toBe(PROVIDER_ID);
+    // v2 bundles the openai-compatible driver rather than installing an npm package,
+    // so the v1 `npm: "@ai-sdk/openai-compatible"` has no equivalent here.
+    expect(info.package).toBe("@opencode/ai/providers/openai-compatible");
+    expect(info.settings?.baseURL).toBe(baseUrl);
+  });
+
+  it("is enabled outright rather than waiting to be activated", () => {
+    // `auto` waits for a credential to show up on an integration we do not register.
+    expect(info.activation).toBe("enabled");
+  });
+
+  it("still sends the placeholder api key the driver insists on", () => {
+    expect(info.settings?.apiKey).toBeTruthy();
+  });
+
+  it("keeps the generous per-turn timeout", () => {
+    expect(Number(info.settings?.timeout)).toBeGreaterThan(300_000);
+  });
+
+  it("advertises the same catalog as v1, including the local titler", () => {
+    const ids = models.map((model) => model.id);
+    expect(ids).toContain(DEFAULT_MODEL);
+    expect(ids).toContain(LOCAL_TITLE_MODEL);
+    expect(ids).toEqual(Object.keys(buildProviderConfig(baseUrl).models));
+  });
+
+  it("declares tool support everywhere except the local titler", () => {
+    const byId = new Map(models.map((model) => [model.id, model]));
+    expect(byId.get(DEFAULT_MODEL)?.capabilities.tools).toBe(true);
+    expect(byId.get(LOCAL_TITLE_MODEL)?.capabilities.tools).toBe(false);
+  });
+
+  it("offers no image input, because the proxy cannot carry attachments", () => {
+    for (const model of models) expect(model.capabilities.input).toEqual(["text"]);
+  });
+
+  it("prices every model at zero, since M365 bills the licence not the token", () => {
+    for (const model of models) {
+      expect(model.cost).toHaveLength(1);
+      expect(model.cost[0]).toMatchObject({ input: 0, output: 0, cache: { read: 0, write: 0 } });
+    }
+  });
+
+  it("carries limits through from the catalog", () => {
+    const model = models.find((candidate) => candidate.id === DEFAULT_MODEL)!;
+    expect(model.limit.context).toBeGreaterThan(0);
+    expect(model.limit.output).toBeGreaterThan(0);
+  });
+});
+
+describe("the v2 catalog entry, against opencode 2's own schema", () => {
+  // These assert our hand-built records against the real constructors in
+  // `@opencode/plugin`, which is a **dev** dependency only: the published package
+  // declares no runtime dependencies, and v2's loader swallows load failures, so a
+  // record that drifts out of shape would otherwise fail completely silently.
+  it("supplies every key opencode 2 requires of a provider", async () => {
+    const { Provider } = await import("@opencode/plugin");
+    const required = Object.keys(Provider.Info.empty(Provider.ID.make(PROVIDER_ID)));
+    expect(Object.keys(buildProviderInfo("http://127.0.0.1:1/v1"))).toEqual(
+      expect.arrayContaining(required),
+    );
+  });
+
+  it("supplies every key opencode 2 requires of a model", async () => {
+    const { Model, Provider } = await import("@opencode/plugin");
+    const required = Object.keys(
+      Model.Info.default(Provider.ID.make(PROVIDER_ID), Model.ID.make(DEFAULT_MODEL)),
+    );
+    for (const model of buildModelInfos()) {
+      expect(Object.keys(model)).toEqual(expect.arrayContaining(required));
+    }
   });
 });

@@ -80,8 +80,12 @@ async function doLogin(args: string[]): Promise<void> {
 
 async function doSetup(args: string[]): Promise<void> {
   // A local checkout is referenced by its built entrypoint; an npm install by name.
+  // opencode 2 additionally refuses a file path, so it gets the package directory —
+  // see `mergeOpencodeConfig`.
   const local = args.includes("--local");
-  const pluginRef = local ? resolve(dirname(fileURLToPath(import.meta.url)), "plugin.mjs") : "opencode-m365-copilot";
+  const dist = dirname(fileURLToPath(import.meta.url));
+  const pluginRef = local ? resolve(dist, "plugin.mjs") : "opencode-m365-copilot";
+  const pluginDir = local ? resolve(dist, "..") : pluginRef;
 
   if (local && !existsSync(pluginRef)) {
     console.error(`No build at ${pluginRef}. Run \`pnpm build\` first.`);
@@ -100,7 +104,7 @@ async function doSetup(args: string[]): Promise<void> {
     }
   }
 
-  const merged = mergeOpencodeConfig(existing, { pluginRef });
+  const merged = mergeOpencodeConfig(existing, { pluginRef, pluginDir });
   mkdirSync(dirname(OPENCODE_CONFIG), { recursive: true });
   writeFileSync(OPENCODE_CONFIG, `${JSON.stringify(merged, null, 2)}\n`);
 

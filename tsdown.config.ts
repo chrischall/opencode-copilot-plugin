@@ -19,7 +19,11 @@ export default defineConfig({
   // `playwright` stays external and is an optional peer: it is only used by
   // `opencode-m365 login`, it is far too heavy to bundle, and it must never end up in
   // the plugin's install path.
-  external: [/^node:/, "playwright", "@opencode-ai/plugin"],
+  // Both plugin API packages stay external. They are type-only imports, so nothing
+  // of them reaches the bundle — but the *dts* bundler will happily inline their
+  // whole type graph if they are not listed, and `@opencode/plugin` drags in
+  // `@opencode/schema` and effect: 16 MB of `plugin.d.mts` when it is missed.
+  external: [/^node:/, "playwright", "@opencode-ai/plugin", "@opencode/plugin"],
   // tsdown externalises anything in `dependencies` by default, so listing them here is
   // what actually pulls them into the bundle.
   noExternal: ["zod", "ws", "otpauth", "@azure/msal-node"],
