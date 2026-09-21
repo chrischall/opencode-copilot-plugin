@@ -42,10 +42,12 @@
  * against the real binaries, 1.18.0 — the bottom of our declared peer range — already
  * has the identical detect call site, so the peer floor did not have to move.
  *
- * `Plugin.define` is spread rather than called around the whole object so that it
- * type-checks the v2 definition on its own, without `server()` confusing it. It is
- * an identity function, and importing it as a **type** keeps the published package
- * free of any runtime dependency on `@opencode/plugin`.
+ * The v2 half is annotated as `Plugin.Plugin` on its own and then spread in, so it is
+ * type-checked without `server()` in the way. opencode's own docs reach the same end
+ * by spreading a `Plugin.define(...)` call — that helper is the identity function, and
+ * calling it would mean importing `@opencode/plugin` at runtime. A type-only import
+ * keeps the published package free of any runtime dependency on it, which is also what
+ * keeps the dts bundler from inlining effect (see `tsdown.config.ts`).
  */
 
 import type { Plugin } from "@opencode/plugin";
