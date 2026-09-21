@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.2...v0.3.0) (2026-09-21)
+
+
+### Features
+
+* run on the opencode 2 plugin API without dropping opencode 1 ([#44](https://github.com/chrischall/opencode-copilot-plugin/issues/44)) ([a1e563f](https://github.com/chrischall/opencode-copilot-plugin/commit/a1e563f549e1e6d6ffbe75820d751d1eb8f42a83))
+
+
+### Bug Fixes
+
+* keep user plugin options when setup re-runs, and tighten the v2 schema guard ([#47](https://github.com/chrischall/opencode-copilot-plugin/issues/47)) ([741d03c](https://github.com/chrischall/opencode-copilot-plugin/commit/741d03cae7905c9c93a029d3d4412021e3598921))
+
 ## [0.2.2](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.1...v0.2.2) (2026-09-03)
 
 
