@@ -22,17 +22,17 @@ import {
 const names = (tools: readonly ToolDef[]) => tools.map((tool) => tool.function.name);
 
 describe("provider config", () => {
-  const provider = buildProviderConfig("http://127.0.0.1:4319/v1");
+  const provider = buildProviderConfig("http://127.0.0.1:4319/v1", "per-launch-secret");
 
   it("points an openai-compatible provider at our local proxy", () => {
     expect(provider.npm).toBe("@ai-sdk/openai-compatible");
     expect(provider.options?.baseURL).toBe("http://127.0.0.1:4319/v1");
   });
 
-  it("sends a placeholder api key so the sdk does not refuse to send a request", () => {
-    // The proxy is unauthenticated and loopback-only, but @ai-sdk/openai-compatible
-    // still expects the header to exist.
-    expect(provider.options?.apiKey).toBeTruthy();
+  it("hands opencode the proxy's per-launch secret as the api key", () => {
+    // The SDK sends it as `Authorization: Bearer`, which is what the proxy checks.
+    // A constant here would let any web page on the machine use the proxy.
+    expect(provider.options?.apiKey).toBe("per-launch-secret");
   });
 
   it("advertises every catalog model, including the local titler", () => {
@@ -186,47 +186,62 @@ describe("plugin options", () => {
     expect(options.setSmallModel).toBe(true);
   });
 
+  it("takes the secret of an external proxy as a string option", () => {
+    expect(resolveOptions({ apiKey: "from-serve" }).apiKey).toBe("from-serve");
+    expect(resolveOptions({ apiKey: 42 as unknown as string }).apiKey).toBeUndefined();
+    expect(resolveOptions({}).apiKey).toBeUndefined();
+  });
+
   it("ignores option values of the wrong type instead of crashing the plugin", () => {
     // opencode passes plugin options straight from user JSON.
     expect(resolveOptions({ lean: "yes" as unknown as boolean }).lean).toBe(true);
   });
 });
 
+const ENDPOINT = { baseUrl: "http://127.0.0.1:4319/v1", apiKey: "per-launch-secret" };
+
 describe("applying config in the opencode config hook", () => {
+  it("points the provider at the proxy with its secret", () => {
+    const config: Record<string, any> = {};
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
+    expect(config.provider.m365.options.baseURL).toBe(ENDPOINT.baseUrl);
+    expect(config.provider.m365.options.apiKey).toBe("per-launch-secret");
+  });
+
   it("registers the provider", () => {
     const config: Record<string, any> = {};
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.provider[PROVIDER_ID].options.baseURL).toBe("http://127.0.0.1:4319/v1");
   });
 
   it("routes the small model to the local titler so title generation never hits M365", () => {
     const config: Record<string, any> = {};
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.small_model).toBe(`${PROVIDER_ID}/${LOCAL_TITLE_MODEL}`);
   });
 
   it("sets a default model only when the user has not chosen one", () => {
     const config: Record<string, any> = { model: "anthropic/claude-sonnet-4-5" };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.model).toBe("anthropic/claude-sonnet-4-5");
   });
 
   it("does not clobber a small model the user already chose", () => {
     const config: Record<string, any> = { small_model: "anthropic/claude-haiku-4-5" };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.small_model).toBe("anthropic/claude-haiku-4-5");
   });
 
   it("applies the lean tool profile", () => {
     const config: Record<string, any> = {};
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.tools.webfetch).toBe(false);
     expect(config.tools.bash).toBe(true);
   });
 
   it("leaves the toolset alone when lean mode is off", () => {
     const config: Record<string, any> = {};
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({ lean: false }));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({ lean: false }));
     expect(config.tools).toBeUndefined();
   });
 
@@ -235,25 +250,25 @@ describe("applying config in the opencode config hook", () => {
     // Anthropic would take away tools that provider handles perfectly well. The
     // trim only applies when an M365 model is the one actually in use.
     const config: Record<string, any> = { model: "anthropic/claude-sonnet-4-5" };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.tools).toBeUndefined();
   });
 
   it("applies the trim when an M365 model is the default", () => {
     const config: Record<string, any> = { model: `${PROVIDER_ID}/gpt-5.5-think-deeper` };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.tools?.webfetch).toBe(false);
   });
 
   it("respects a tool the user explicitly re-enabled", () => {
     const config: Record<string, any> = { tools: { webfetch: true } };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.tools.webfetch).toBe(true);
   });
 
   it("preserves other providers", () => {
     const config: Record<string, any> = { provider: { anthropic: { name: "Anthropic" } } };
-    applyPluginConfig(config, "http://127.0.0.1:4319/v1", resolveOptions({}));
+    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
     expect(config.provider.anthropic.name).toBe("Anthropic");
     expect(config.provider[PROVIDER_ID]).toBeDefined();
   });
@@ -402,7 +417,7 @@ describe("merging into an on-disk opencode.json", () => {
 
 describe("the v2 catalog entry", () => {
   const baseUrl = "http://127.0.0.1:4319/v1";
-  const info = buildProviderInfo(baseUrl);
+  const info = buildProviderInfo(baseUrl, "per-launch-secret");
   const models = buildModelInfos();
 
   it("registers a provider opencode 2 will actually talk to", () => {
@@ -411,6 +426,10 @@ describe("the v2 catalog entry", () => {
     // so the v1 `npm: "@ai-sdk/openai-compatible"` has no equivalent here.
     expect(info.package).toBe("@opencode/ai/providers/openai-compatible");
     expect(info.settings?.baseURL).toBe(baseUrl);
+  });
+
+  it("carries the proxy's per-launch secret as the api key", () => {
+    expect(info.settings?.apiKey).toBe("per-launch-secret");
   });
 
   it("is enabled outright rather than waiting to be activated", () => {
@@ -430,7 +449,7 @@ describe("the v2 catalog entry", () => {
     const ids = models.map((model) => model.id);
     expect(ids).toContain(DEFAULT_MODEL);
     expect(ids).toContain(LOCAL_TITLE_MODEL);
-    expect(ids).toEqual(Object.keys(buildProviderConfig(baseUrl).models));
+    expect(ids).toEqual(Object.keys(buildProviderConfig(baseUrl, "k").models));
   });
 
   it("declares tool support everywhere except the local titler", () => {
@@ -485,7 +504,7 @@ describe("the v2 catalog entry, against opencode 2's own schema", () => {
   it("decodes as a provider opencode 2 accepts", async () => {
     const [Schema, { Provider }] = await Promise.all([loadSchema(), import("@opencode/plugin")]);
     const decode = Schema.decodeUnknownSync(Provider.Info);
-    expect(() => decode(buildProviderInfo("http://127.0.0.1:4319/v1"))).not.toThrow();
+    expect(() => decode(buildProviderInfo("http://127.0.0.1:4319/v1", "k"))).not.toThrow();
   });
 
   it("decodes every model opencode 2 would be offered", async () => {

@@ -3,13 +3,16 @@
  *
  * Small on purpose: `node:http` rather than a framework, because this runs inside
  * opencode's own process and every dependency here is one opencode has to install.
- * It binds loopback only — the proxy is unauthenticated and speaks to a paid account
- * with your credentials.
+ * It binds loopback only, and loopback is not a trust boundary: every browser tab on
+ * the machine can reach it too. So every request must also carry a per-launch secret
+ * (`Authorization: Bearer <apiKey>`), must name a loopback `Host` (DNS rebinding), and
+ * must not come from a browser `Origin` the caller did not allow. No CORS headers are
+ * ever sent — opencode is a server-side client and needs none.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel } from "./models.js";
@@ -75,13 +78,39 @@ export interface ServerDeps {
    */
   leanSystemPrompt?: string;
   port?: number;
+  /** Loopback only: `127.0.0.1` (the default), `::1` or `localhost`. Anything else throws. */
   host?: string;
+  /**
+   * The bearer secret every request must carry. Omit it and a fresh 32-byte random
+   * one is generated per launch, which is what the in-process plugin wants: it hands
+   * the key straight to opencode's provider config and nobody else ever sees it.
+   */
+  apiKey?: string;
+  /**
+   * Browser origins allowed to call the proxy. Empty by default: opencode sends no
+   * `Origin`, and any request that carries one came from a web page.
+   */
+  allowedOrigins?: readonly string[];
+  /** Largest request body accepted, in bytes. */
+  maxBodyBytes?: number;
 }
 
 export interface ProxyHandle {
   url: string;
   port: number;
+  /** The bearer secret a client must send. */
+  apiKey: string;
   close(): Promise<void>;
+}
+
+/** Generous: a long agent history is a few MB of JSON; this only stops abuse. */
+export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/** A fresh per-launch secret: 32 random bytes, base64url. */
+export function generateApiKey(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 interface Conversation extends ConversationState {
@@ -91,6 +120,12 @@ interface Conversation extends ConversationState {
 export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
   const pool = new ConversationPool();
   const host = deps.host ?? "127.0.0.1";
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(`Refusing to bind ${host}: the proxy only listens on loopback (127.0.0.1, ::1, localhost)`);
+  }
+  const apiKey = deps.apiKey || generateApiKey();
+  const allowedOrigins = new Set(deps.allowedOrigins ?? []);
+  const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   // Resolved once, then reused: provisioning an agent is slow and only the first
   // tool request should pay for it.
@@ -106,8 +141,9 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     return agentPromise;
   };
 
+  const portOf = () => (server.address() as AddressInfo).port;
   const server = createServer((request, response) => {
-    handle(request, response, { deps, pool, agentId }).catch((error) => {
+    handle(request, response, { deps, pool, agentId, apiKey, allowedOrigins, maxBodyBytes, port: portOf() }).catch((error) => {
       log.error("unhandled request failure", String(error));
       sendError(response, 500, "internal_error", String(error));
     });
@@ -119,9 +155,11 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
   });
 
   const { port } = server.address() as AddressInfo;
+  const urlHost = host.includes(":") ? `[${host}]` : host;
   return {
-    url: `http://${host}:${port}`,
+    url: `http://${urlHost}:${port}`,
     port,
+    apiKey,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();
@@ -134,19 +172,75 @@ interface Context {
   deps: ServerDeps;
   pool: ConversationPool;
   agentId: () => Promise<string | null>;
+  apiKey: string;
+  allowedOrigins: ReadonlySet<string>;
+  maxBodyBytes: number;
+  port: number;
+}
+
+class PayloadTooLargeError extends Error {}
+
+/**
+ * Is `Host` one of the names this listener is actually reachable by?
+ *
+ * A DNS-rebound page talks to 127.0.0.1 while its `Host` still names the attacker's
+ * domain, so anything but a loopback name on our own port is refused.
+ */
+function isLoopbackHost(header: string | undefined, port: number): boolean {
+  if (!header) return false;
+  const match = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(header.trim().toLowerCase());
+  if (!match) return false;
+  const name = match[1]!.replace(/^\[|\]$/g, "");
+  return LOOPBACK_HOSTS.has(name) && Number(match[2] ?? 80) === port;
+}
+
+/** Constant-time check of `Authorization: Bearer <key>`. */
+function hasApiKey(header: string | undefined, apiKey: string): boolean {
+  const match = /^Bearer\s+(.+)$/i.exec(header ?? "");
+  if (!match) return false;
+  const given = Buffer.from(match[1]!.trim());
+  const expected = Buffer.from(apiKey);
+  return given.length === expected.length && timingSafeEqual(given, expected);
 }
 
 async function handle(request: IncomingMessage, response: ServerResponse, context: Context): Promise<void> {
   const url = new URL(request.url ?? "/", "http://localhost");
   const method = (request.method ?? "GET").toUpperCase();
 
-  if (method === "OPTIONS") {
-    response.writeHead(204, corsHeaders()).end();
+  // Order matters: the browser-shaped refusals come first, so a web page learns
+  // nothing — not even whether it guessed the secret.
+  if (!isLoopbackHost(request.headers.host, context.port)) {
+    sendError(response, 403, "forbidden", "Host must be a loopback address");
     return;
   }
 
+  const origin = request.headers.origin;
+  if (origin !== undefined && !context.allowedOrigins.has(origin)) {
+    sendError(response, 403, "forbidden", "Browser origins may not use this proxy");
+    return;
+  }
+
+  // Never grant a preflight: opencode does not send one, and a page that needs one
+  // is exactly what this proxy must not serve.
+  if (method === "OPTIONS") {
+    sendError(response, 403, "forbidden", "CORS is not supported");
+    return;
+  }
+
+  // Liveness only — carries nothing worth protecting, and lets a script check the
+  // port without the secret.
   if (method === "GET" && url.pathname === "/health") {
     sendJson(response, 200, { status: "ok" });
+    return;
+  }
+
+  if (!hasApiKey(request.headers.authorization, context.apiKey)) {
+    sendError(
+      response,
+      401,
+      "invalid_api_key",
+      "Missing or wrong proxy secret. Send `Authorization: Bearer <key>` with the key the proxy printed or was given (M365_PROXY_KEY).",
+    );
     return;
   }
 
@@ -178,8 +272,13 @@ async function handleChatCompletion(
 ): Promise<void> {
   let body: ChatRequest;
   try {
-    body = ChatCompletionRequest.parse(JSON.parse(await readBody(request)));
+    body = ChatCompletionRequest.parse(JSON.parse(await readBody(request, context.maxBodyBytes)));
   } catch (error) {
+    if (error instanceof PayloadTooLargeError) {
+      sendError(response, 413, "request_too_large", error.message);
+      request.resume();
+      return;
+    }
     sendError(response, 400, "invalid_request_error", String((error as Error)?.message ?? error));
     return;
   }
@@ -359,21 +458,12 @@ function startSse(response: ServerResponse): void {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
-    ...corsHeaders(),
   });
-}
-
-function corsHeaders(): Record<string, string> {
-  return {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
-  response.writeHead(status, { "Content-Type": "application/json", ...corsHeaders() });
+  response.writeHead(status, { "Content-Type": "application/json" });
   response.end(payload);
 }
 
@@ -382,9 +472,18 @@ function sendError(response: ServerResponse, status: number, code: string, messa
   sendJson(response, status, { error: { message, type: code, code } });
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
+async function readBody(request: IncomingMessage, limit: number): Promise<string> {
+  const declared = Number(request.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new PayloadTooLargeError(`Request body exceeds ${limit} bytes`);
+  }
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
+  let size = 0;
+  for await (const chunk of request) {
+    size += (chunk as Buffer).length;
+    if (size > limit) throw new PayloadTooLargeError(`Request body exceeds ${limit} bytes`);
+    chunks.push(chunk as Buffer);
+  }
   return Buffer.concat(chunks).toString("utf8");
 }
 

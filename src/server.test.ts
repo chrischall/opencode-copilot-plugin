@@ -1,3 +1,4 @@
+import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem, throttling, type StubServer } from "../test/stub-copilot.js";
 import { AuthRequiredError } from "./auth.js";
@@ -30,8 +31,15 @@ async function start(overrides: Record<string, any> = {}) {
   return proxy;
 }
 
+/** `fetch`, carrying the running proxy's per-launch secret the way opencode does. */
+const authedFetch = (input: string, init: RequestInit = {}) =>
+  fetch(input, {
+    ...init,
+    headers: { Authorization: `Bearer ${proxy!.apiKey}`, ...(init.headers as Record<string, string> | undefined) },
+  });
+
 const post = (url: string, body: unknown) =>
-  fetch(`${url}/v1/chat/completions`, {
+  authedFetch(`${url}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -56,19 +64,172 @@ describe("service endpoints", () => {
 
   it("lists the model catalog", async () => {
     const { url } = await start();
-    const body: any = await (await fetch(`${url}/v1/models`)).json();
+    const body: any = await (await authedFetch(`${url}/v1/models`)).json();
     expect(body.object).toBe("list");
     expect(body.data.map((m: any) => m.id)).toContain(DEFAULT_MODEL);
   });
 
   it("404s an unknown path instead of hanging", async () => {
     const { url } = await start();
-    expect((await fetch(`${url}/nope`)).status).toBe(404);
+    expect((await authedFetch(`${url}/nope`)).status).toBe(404);
   });
 
-  it("binds loopback only — the proxy is unauthenticated", async () => {
+  it("binds loopback only", async () => {
     const handle = await start();
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:/);
+  });
+});
+
+/** A raw request, so a test can set headers `fetch` will not let it forge (Host, Origin). */
+function rawRequest(
+  url: string,
+  options: { method?: string; path?: string; headers?: Record<string, string>; body?: string },
+): Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }> {
+  const { port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      { host: "127.0.0.1", port: Number(port), method: options.method ?? "GET", path: options.path ?? "/", headers: options.headers },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({ status: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end(options.body);
+  });
+}
+
+describe("who may call the proxy", () => {
+  // The proxy spends the user's corporate M365 quota and returns tenant-grounded
+  // answers. A browser tab must never be able to use it: not by a cross-origin
+  // fetch, not by a CORS-simple text/plain POST, and not by DNS rebinding.
+  const chat = { messages: [{ role: "user", content: "hi" }] };
+
+  it("generates a fresh high-entropy secret per launch", async () => {
+    const first = await start();
+    const firstKey = first.apiKey;
+    await first.close();
+    proxy = undefined;
+    const second = await start();
+    expect(firstKey.length).toBeGreaterThanOrEqual(43); // 32 random bytes, base64url
+    expect(second.apiKey).not.toBe(firstKey);
+  });
+
+  it("uses a secret supplied by the caller", async () => {
+    const handle = await start({ apiKey: "a-caller-chosen-secret-that-is-long-enough" });
+    expect(handle.apiKey).toBe("a-caller-chosen-secret-that-is-long-enough");
+  });
+
+  it("refuses a chat completion with no secret, before touching M365", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    const response = await fetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(chat),
+    });
+    expect(response.status).toBe(401);
+    expect(stub.connections).toHaveLength(0);
+  });
+
+  it("refuses a wrong secret", async () => {
+    const { url } = await start();
+    const response = await fetch(`${url}/v1/models`, { headers: { Authorization: "Bearer m365-local" } });
+    expect(response.status).toBe(401);
+  });
+
+  it("refuses the model list without the secret", async () => {
+    const { url } = await start();
+    expect((await fetch(`${url}/v1/models`)).status).toBe(401);
+  });
+
+  it("accepts the secret opencode is handed", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("56"), completion()] });
+    const { url } = await start();
+    const response = await post(url, chat);
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses a request carrying a browser Origin, even with the secret", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    const response = await rawRequest(url, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      headers: {
+        Origin: "https://evil.example",
+        Authorization: `Bearer ${proxy!.apiKey}`,
+        "Content-Type": "text/plain",
+      },
+      body: JSON.stringify(chat),
+    });
+    expect(response.status).toBe(403);
+    expect(stub.connections).toHaveLength(0);
+  });
+
+  it("accepts an Origin the caller explicitly allowed", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start({ allowedOrigins: ["http://localhost:3000"] });
+    const response = await rawRequest(url, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      headers: { Origin: "http://localhost:3000", Authorization: `Bearer ${proxy!.apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(chat),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses a CORS preflight and grants no CORS headers", async () => {
+    const { url } = await start();
+    const response = await rawRequest(url, {
+      method: "OPTIONS",
+      path: "/v1/chat/completions",
+      headers: {
+        Origin: "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization, content-type",
+      },
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(response.headers["access-control-allow-headers"]).toBeUndefined();
+  });
+
+  it("sends no CORS headers on a normal response either", async () => {
+    const { url } = await start();
+    const response = await authedFetch(`${url}/v1/models`);
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("refuses a foreign Host header, which is what DNS rebinding looks like", async () => {
+    const { url } = await start();
+    const response = await rawRequest(url, {
+      path: "/v1/models",
+      headers: { Host: `attacker.example:${new URL(url).port}`, Authorization: `Bearer ${proxy!.apiKey}` },
+    });
+    expect(response.status).toBe(403);
+  });
+
+  it("accepts localhost as a Host alias for the loopback address", async () => {
+    const { url } = await start();
+    const response = await rawRequest(url, {
+      path: "/v1/models",
+      headers: { Host: `localhost:${new URL(url).port}`, Authorization: `Bearer ${proxy!.apiKey}` },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("caps the request body instead of buffering whatever arrives", async () => {
+    const { url } = await start({ maxBodyBytes: 1024 });
+    const response = await post(url, { messages: [{ role: "user", content: "x".repeat(4096) }] });
+    expect(response.status).toBe(413);
+  });
+
+  it("refuses to bind anything but loopback", async () => {
+    await expect(start({ host: "0.0.0.0" })).rejects.toThrow(/loopback/);
   });
 });
 
@@ -265,7 +426,7 @@ describe("the local titler", () => {
     // decision of what M365 actually receives stays here in the proxy.
     stub = await startStubCopilot();
     const { url } = await start();
-    const response = await fetch(`${url}/v1/chat/completions`, {
+    const response = await authedFetch(`${url}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", [AUX_REQUEST_KIND_HEADER]: "title" },
       body: JSON.stringify({
@@ -283,7 +444,7 @@ describe("the local titler", () => {
     // we cannot afford. See models.ts for why the distinction matters.
     stub = await startStubCopilot({ respond: () => [botMessage("summary"), completion()] });
     const { url } = await start();
-    const response = await fetch(`${url}/v1/chat/completions`, {
+    const response = await authedFetch(`${url}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", [AUX_REQUEST_KIND_HEADER]: "compaction" },
       body: JSON.stringify({
@@ -354,7 +515,7 @@ describe("failures the client has to be able to tell apart", () => {
 
   it("rejects a malformed request with 400", async () => {
     const { url } = await start();
-    const response = await fetch(`${url}/v1/chat/completions`, {
+    const response = await authedFetch(`${url}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{not json",

@@ -17,7 +17,8 @@ real framing, so a full turn is exercised offline. **Keep it that way** — a te
 needs a tenant is a test nobody else can run.
 
 To exercise the whole stack through real opencode without touching Microsoft, run the
-proxy against the stub and point the plugin at it with the `baseUrl` option.
+proxy against the stub and point the plugin at it with the `baseUrl` and `apiKey` options
+(`serve` prints the key, or set `M365_PROXY_KEY` for both sides).
 
 ## Conventional Commits
 

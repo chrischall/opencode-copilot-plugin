@@ -73,6 +73,7 @@ function fakeContext(options: Record<string, unknown> = {}) {
 /** Every test here uses an already-running proxy, so none of them start a server. */
 const withProxy = (extra: Record<string, unknown> = {}) => ({
   baseUrl: "http://127.0.0.1:4319/v1",
+  apiKey: "serve-secret",
   ...extra,
 });
 
@@ -85,6 +86,7 @@ describe("the opencode 2 setup", () => {
     expect(added).toHaveLength(1);
     expect(added[0].info.id).toBe(PROVIDER_ID);
     expect(added[0].info.settings.baseURL).toBe("http://127.0.0.1:4319/v1");
+    expect(added[0].info.settings.apiKey).toBe("serve-secret");
     expect(added[0].models.map((model: any) => model.id)).toContain(DEFAULT_MODEL);
   });
 

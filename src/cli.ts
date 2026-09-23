@@ -49,6 +49,7 @@ function printHelp(): void {
   login [--interactive]   Sign in to Microsoft 365 and store the token cache
   setup [--local]         Add the plugin to ~/.config/opencode/opencode.json
   serve [--port <n>]      Run the OpenAI-compatible proxy standalone
+                          (key from M365_PROXY_KEY, else printed)
   doctor                  Check auth, the agent, and the proxy
 
 Config lives in ${CONFIG_DIR}
@@ -123,16 +124,31 @@ async function doServe(args: string[]): Promise<void> {
   const port = portIndex >= 0 ? Number(args[portIndex + 1]) : 4141;
   const tokens = createTokenClient();
 
+  // A fixed key lets a long-lived opencode config keep working across restarts;
+  // otherwise every launch mints a fresh one.
+  const fixedKey = process.env.M365_PROXY_KEY || undefined;
+
   const proxy = await startServer({
     getToken: () => tokens.getToken(),
     resolveAgent: () => getOrCreateAgent({ getTokenForScope: (scopes) => tokens.getTokenForScope(scopes) }),
     port,
+    ...(fixedKey ? { apiKey: fixedKey } : {}),
   });
 
   console.log(`M365 Copilot proxy listening on ${proxy.url}`);
   console.log(`  models:      ${proxy.url}/v1/models`);
   console.log(`  completions: ${proxy.url}/v1/chat/completions`);
-  console.log("\nUnauthenticated and loopback-only. Ctrl+C to stop.");
+  console.log("\nLoopback-only. Every request must send `Authorization: Bearer <key>`;");
+  console.log("browser origins and CORS are refused.");
+  if (fixedKey) {
+    console.log("  key:         from M365_PROXY_KEY");
+  } else {
+    console.log(`  key:         ${proxy.apiKey}`);
+    console.log("               (new every launch — set M365_PROXY_KEY to keep one)");
+  }
+  console.log(`\nPoint the plugin here with { "baseUrl": "${proxy.url}/v1", "apiKey": "<key>" },`);
+  console.log("or leave apiKey out and export the same M365_PROXY_KEY to opencode.");
+  console.log("Ctrl+C to stop.");
 
   process.on("SIGINT", () => {
     void proxy.close().then(() => process.exit(0));
@@ -182,7 +198,11 @@ async function doDoctor(): Promise<void> {
     const proxy = await startServer({ getToken: () => tokens.getToken(), port: 0 });
     const response = await fetch(`${proxy.url}/health`);
     check("starts and serves /health", response.ok, proxy.url);
-    const models: any = await (await fetch(`${proxy.url}/v1/models`)).json();
+    const refused = await fetch(`${proxy.url}/v1/models`);
+    check("refuses a request without the secret", refused.status === 401);
+    const models: any = await (
+      await fetch(`${proxy.url}/v1/models`, { headers: { Authorization: `Bearer ${proxy.apiKey}` } })
+    ).json();
     check("advertises models", models.data?.length > 0, `${models.data?.length ?? 0} models`);
     check("local titler present", models.data?.some((m: any) => m.id === LOCAL_TITLE_MODEL));
     await proxy.close();

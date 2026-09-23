@@ -50,6 +50,8 @@ const LEAN_SYSTEM_PROMPT = [
 export interface M365Runtime {
   /** Where the OpenAI-compatible surface is, ready to hand to a provider entry. */
   baseUrl: string;
+  /** The bearer secret that surface demands, ready to hand over as the `apiKey`. */
+  apiKey: string;
   options: PluginOptions;
   /** Stops the proxy, if this runtime is the one that started it. */
   close(): Promise<void>;
@@ -64,9 +66,18 @@ export interface M365Runtime {
  */
 export async function startRuntime(rawOptions?: Record<string, unknown>): Promise<M365Runtime> {
   const options = resolveOptions(rawOptions as Partial<PluginOptions> | undefined);
+  const sharedKey = process.env.M365_PROXY_KEY || undefined;
 
   if (options.baseUrl) {
-    return { baseUrl: options.baseUrl, options, close: async () => {} };
+    const apiKey = options.apiKey ?? sharedKey;
+    if (!apiKey) {
+      // Not a throw: a plugin that throws during load takes opencode's whole config
+      // with it. The proxy will answer 401 with the same advice.
+      log.warn(
+        "baseUrl is set but no proxy secret is: pass the key `opencode-m365 serve` printed as the `apiKey` plugin option, or set M365_PROXY_KEY",
+      );
+    }
+    return { baseUrl: options.baseUrl, apiKey: apiKey ?? "missing-proxy-secret", options, close: async () => {} };
   }
 
   const tokens = createTokenClient();
@@ -76,9 +87,11 @@ export async function startRuntime(rawOptions?: Record<string, unknown>): Promis
     // round trips, so it happens lazily on the first turn that carries tools.
     resolveAgent: () => getOrCreateAgent({ getTokenForScope: (scopes) => tokens.getTokenForScope(scopes) }),
     lean: options.lean,
+    // Normally absent, so the proxy mints a fresh secret for this launch.
+    ...(sharedKey ? { apiKey: sharedKey } : {}),
     ...(options.leanSystemPrompt ? { leanSystemPrompt: LEAN_SYSTEM_PROMPT } : {}),
   });
 
   log.info(`M365 Copilot proxy listening on ${proxy.url}`);
-  return { baseUrl: `${proxy.url}/v1`, options, close: () => proxy.close() };
+  return { baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey, options, close: () => proxy.close() };
 }

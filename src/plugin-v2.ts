@@ -28,7 +28,7 @@ const log = createLogger("plugin");
 export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
   const runtime = await startRuntime(ctx.options as Record<string, unknown>);
 
-  const info = buildProviderInfo(runtime.baseUrl);
+  const info = buildProviderInfo(runtime.baseUrl, runtime.apiKey);
   const models = buildModelInfos();
 
   // `add` takes opencode's branded `Provider.ID`/`Model.ID` strings. We build the

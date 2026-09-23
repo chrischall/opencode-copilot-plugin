@@ -37,7 +37,7 @@ export async function server(input: PluginInput, rawOptions?: Record<string, unk
 
   return {
     async config(config) {
-      applyPluginConfig(config as Record<string, any>, runtime.baseUrl, runtime.options);
+      applyPluginConfig(config as Record<string, any>, runtime, runtime.options);
     },
 
     async dispose() {

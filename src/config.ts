@@ -156,6 +156,18 @@ export interface PluginOptions {
   leanSystemPrompt: boolean;
   /** Use an already-running proxy instead of starting one in-process. */
   baseUrl?: string;
+  /**
+   * The secret that external proxy demands (`opencode-m365 serve` prints it, or takes
+   * it from `M365_PROXY_KEY`). Not needed for the in-process proxy, whose per-launch
+   * secret is generated and handed over automatically.
+   */
+  apiKey?: string;
+}
+
+/** Where the proxy is, and the bearer secret it requires. */
+export interface ProxyEndpoint {
+  baseUrl: string;
+  apiKey: string;
 }
 
 /**
@@ -174,6 +186,7 @@ export function resolveOptions(raw: Partial<PluginOptions> | undefined): PluginO
     setSmallModel: bool(options.setSmallModel, true),
     leanSystemPrompt: bool(options.leanSystemPrompt, false),
     baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
+    apiKey: typeof options.apiKey === "string" && options.apiKey !== "" ? options.apiKey : undefined,
   };
 }
 
@@ -202,7 +215,7 @@ export interface ProviderConfig {
 }
 
 /** The `provider.m365` entry pointing opencode at our local OpenAI-compatible proxy. */
-export function buildProviderConfig(baseUrl: string): ProviderConfig {
+export function buildProviderConfig(baseUrl: string, apiKey: string): ProviderConfig {
   const models: Record<string, ProviderModelConfig> = {};
   for (const model of MODELS) {
     models[model.id] = {
@@ -223,8 +236,9 @@ export function buildProviderConfig(baseUrl: string): ProviderConfig {
     name: "Microsoft 365 Copilot",
     options: {
       baseURL: baseUrl,
-      // Loopback and unauthenticated, but the SDK still wants a bearer value.
-      apiKey: "m365-local",
+      // The proxy's per-launch secret. The SDK sends it as `Authorization: Bearer`,
+      // which is what stops every other process and web page from using the proxy.
+      apiKey,
       // A reasoning tone takes 10-30s, and a turn can retry once behind the scenes.
       // opencode's default 5 minutes is not always enough.
       timeout: 900_000,
@@ -266,7 +280,7 @@ export interface ModelInfoV2 {
 }
 
 /** The opencode 2 provider record pointing at our local OpenAI-compatible proxy. */
-export function buildProviderInfo(baseUrl: string): ProviderInfoV2 {
+export function buildProviderInfo(baseUrl: string, apiKey: string): ProviderInfoV2 {
   return {
     id: PROVIDER_ID,
     name: "Microsoft 365 Copilot",
@@ -278,8 +292,8 @@ export function buildProviderInfo(baseUrl: string): ProviderInfoV2 {
     package: "@opencode/ai/providers/openai-compatible",
     settings: {
       baseURL: baseUrl,
-      // Loopback and unauthenticated, but the driver still wants a bearer value.
-      apiKey: "m365-local",
+      // The proxy's per-launch secret, sent as `Authorization: Bearer`.
+      apiKey,
       // A reasoning tone takes 10-30s, and a turn can retry once behind the scenes.
       // opencode's default 5 minutes is not always enough.
       timeout: 900_000,
@@ -334,11 +348,11 @@ export function buildModelInfos(): ModelInfoV2[] {
  */
 export function applyPluginConfig(
   config: Record<string, any>,
-  baseUrl: string,
+  endpoint: ProxyEndpoint,
   options: PluginOptions,
 ): void {
   config.provider ??= {};
-  config.provider[PROVIDER_ID] = buildProviderConfig(baseUrl);
+  config.provider[PROVIDER_ID] = buildProviderConfig(endpoint.baseUrl, endpoint.apiKey);
 
   if (options.setDefaultModel && !config.model) {
     config.model = `${PROVIDER_ID}/${DEFAULT_MODEL}`;

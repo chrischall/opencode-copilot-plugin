@@ -162,10 +162,16 @@ records are checked against the real `@opencode/plugin` schema constructors. It 
     "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
     "setDefaultModel": true,   // set `model` if you have not (default: true)
     "setSmallModel": true,     // route title generation to the local titler (default: true)
-    "baseUrl": null            // use an already-running proxy instead of an in-process one
+    "baseUrl": null,           // use an already-running proxy instead of an in-process one
+    "apiKey": null             // that proxy's secret (or export M365_PROXY_KEY instead)
   }]]
 }
 ```
+
+The in-process proxy needs no key configured: it mints a random secret each launch and
+hands it to opencode itself. Only a standalone `opencode-m365 serve` proxy needs one —
+`serve` prints its key, or takes a fixed one from `M365_PROXY_KEY`. Either put that key
+in `apiKey`, or export the same `M365_PROXY_KEY` to opencode and leave `apiKey` out.
 
 On opencode 2 the same block goes under `plugins`, as `{ "package": ..., "options": ... }`.
 
@@ -231,6 +237,7 @@ which belongs to the m365-copilot-proxy project.
 opencode-m365 login [--interactive]   # sign in
 opencode-m365 setup [--local]         # register the plugin with opencode
 opencode-m365 serve [--port 4141]     # run the proxy standalone, for any OpenAI client
+                                      # (send its key as `Authorization: Bearer`)
 opencode-m365 doctor                  # check auth, agent, proxy and opencode wiring
 ```
 

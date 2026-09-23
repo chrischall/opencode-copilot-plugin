@@ -38,7 +38,7 @@ do not silently move the logic back.
 | `src/agent.ts` | Copilot Studio declarative agent: discovery, create, publish, hash-versioning |
 | `src/fenced.ts` | The fenced tool-call contract, both directions, plus the hardening layers |
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
-| `src/server.ts` | The HTTP surface. `node:http`, loopback only |
+| `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |
 | `src/config.ts` | Provider config and tool policy — the pure decisions |
 | `src/plugin.ts` | The entry. One default export carrying both plugin APIs — nothing else |
 | `src/plugin-v1.ts` | opencode 1's `server()`: the `config` hook and `dispose` |
@@ -60,7 +60,8 @@ still in flight when the awaited call returns. Use `connection.waitForFrame`, no
 direct read of `frames`.
 
 For an end-to-end check through real opencode without touching Microsoft, run the proxy
-against the stub and point the plugin at it with the `baseUrl` option.
+against the stub and point the plugin at it with the `baseUrl` and `apiKey` options
+(`serve` prints the key, or set `M365_PROXY_KEY` for both sides).
 
 ## Supporting both opencode plugin APIs
 
