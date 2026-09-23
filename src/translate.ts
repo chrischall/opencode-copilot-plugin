@@ -11,7 +11,7 @@
  *   come back as fenced blocks, which `fenced.ts` converts in both directions.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { buildToolPrompt, parseToolCalls, type ParsedToolCall, type ToolDef } from "./fenced.js";
 import type { TurnResult } from "./session.js";
@@ -77,11 +77,19 @@ export interface PoolOptions {
   maxIdleMs?: number;
 }
 
+export interface ResolveOptions {
+  /** The harness's own session id, when it sends one. The strongest identity there is. */
+  sessionId?: string;
+}
+
 /**
  * Maps an OpenAI client's stateless history onto stateful M365 conversations.
  *
- * Identity is the first user message: an agent loop keeps resending the same opening
- * turn, so it is a stable handle for "this is still the same task".
+ * Identity is the harness's session id when it names one (the opencode 2 plugin
+ * does). Otherwise it is a sha256 of the system prompt plus the first user message:
+ * an agent loop keeps resending both, so together they are a stable handle for "this
+ * is still the same task" — and the system prompt carries the working directory, so
+ * the same opener in two repos stays apart.
  */
 export class ConversationPool {
   private readonly conversations = new Map<string, ConversationState>();
@@ -91,10 +99,10 @@ export class ConversationPool {
     this.maxIdleMs = options.maxIdleMs ?? 60 * 60 * 1000;
   }
 
-  resolve(messages: ChatMessage[]): ConversationState {
+  resolve(messages: ChatMessage[], options: ResolveOptions = {}): ConversationState {
     this.evictStale();
 
-    const key = fingerprint(messages);
+    const key = options.sessionId ? `s:${createHash("sha256").update(options.sessionId).digest("hex")}` : fingerprint(messages);
     const existing = this.conversations.get(key);
     if (existing) {
       // A shorter history than we have already sent means the client restarted the
@@ -122,11 +130,15 @@ export class ConversationPool {
 }
 
 function fingerprint(messages: ChatMessage[]): string {
+  const system = messages
+    .filter((message) => message.role === "system" || message.role === "developer")
+    .map(contentOf)
+    .join("\n");
   const firstUser = messages.find((message) => message.role === "user");
-  const text = firstUser ? contentOf(firstUser) : "";
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-  return `c${hash}`;
+  const hash = createHash("sha256");
+  // Length-prefixed, so no split of the same bytes between the two fields collides.
+  for (const part of [system, firstUser ? contentOf(firstUser) : ""]) hash.update(`${part.length}:${part}`);
+  return `c:${hash.digest("hex")}`;
 }
 
 /** Message content as plain text, flattening the array-of-parts form. */

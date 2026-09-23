@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PROVIDER_ID } from "./config.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
-import { AUX_REQUEST_KIND_HEADER } from "./server.js";
+import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER } from "./server.js";
 import { setup } from "./plugin-v2.js";
 
 /**
@@ -154,7 +154,7 @@ describe("the opencode 2 setup", () => {
       for (const kind of ["primary", "compaction", "generate"]) {
         const event = titleRequest({ kind });
         harness.hook("model.request")!(event);
-        expect(event.headers).toEqual({});
+        expect(event.headers[AUX_REQUEST_KIND_HEADER]).toBeUndefined();
       }
     });
 
@@ -163,6 +163,45 @@ describe("the opencode 2 setup", () => {
       await setup(harness.ctx as never);
 
       const event = titleRequest({ model: { providerID: PROVIDER_ID, id: LOCAL_TITLE_MODEL } });
+      harness.hook("model.request")!(event);
+      expect(event.headers).toEqual({});
+    });
+  });
+
+  describe("naming the session", () => {
+    it("tells the proxy which opencode session a primary request belongs to", async () => {
+      // Two sessions opening with the same message must not share an M365 conversation.
+      const harness = fakeContext(withProxy());
+      await setup(harness.ctx as never);
+
+      const event = { kind: "primary", sessionID: "ses_1", model: { providerID: PROVIDER_ID, id: DEFAULT_MODEL }, headers: {} as Record<string, string> };
+      harness.hook("model.request")!(event);
+      expect(event.headers[SESSION_ID_HEADER]).toBe("ses_1");
+    });
+
+    it("does so even with title routing turned off", async () => {
+      const harness = fakeContext(withProxy({ setSmallModel: false }));
+      await setup(harness.ctx as never);
+
+      const event = { kind: "primary", sessionID: "ses_1", model: { providerID: PROVIDER_ID, id: DEFAULT_MODEL }, headers: {} as Record<string, string> };
+      harness.hook("model.request")!(event);
+      expect(event.headers[SESSION_ID_HEADER]).toBe("ses_1");
+    });
+
+    it("still leaves titles alone when title routing is off", async () => {
+      const harness = fakeContext(withProxy({ setSmallModel: false }));
+      await setup(harness.ctx as never);
+
+      const event = { kind: "title", sessionID: "ses_1", model: { providerID: PROVIDER_ID, id: DEFAULT_MODEL }, headers: {} as Record<string, string> };
+      harness.hook("model.request")!(event);
+      expect(event.headers).toEqual({});
+    });
+
+    it("leaves other providers' requests alone", async () => {
+      const harness = fakeContext(withProxy());
+      await setup(harness.ctx as never);
+
+      const event = { kind: "primary", sessionID: "ses_1", model: { providerID: "anthropic", id: "claude" }, headers: {} as Record<string, string> };
       harness.hook("model.request")!(event);
       expect(event.headers).toEqual({});
     });

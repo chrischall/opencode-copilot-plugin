@@ -247,9 +247,11 @@ opencode-m365 doctor                  # check auth, agent, proxy and opencode wi
 
 ## Limits
 
-- **600 user messages per conversation.** The proxy reuses one conversation per task and
+- **600 user messages per conversation.** The proxy reuses one conversation per task,
   sends only new messages, and reports the remaining budget in
-  `usage.x_m365_conversation_remaining`.
+  `usage.x_m365_conversation_remaining`. A task is the opencode session on opencode 2,
+  or the system prompt plus the first user message otherwise; turns within one task run
+  one at a time.
 - **Account-level throttling** exists and is keyed to your identity, so re-authenticating
   does not clear it. It self-heals after a lull.
 - **Streaming** works for tool-less turns. A tool turn is buffered, because a fenced call

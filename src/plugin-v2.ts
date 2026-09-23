@@ -21,7 +21,7 @@ import { PROVIDER_ID, buildModelInfos, buildProviderInfo } from "./config.js";
 import { DEFAULT_MODEL, isLocalModel } from "./models.js";
 import { createLogger } from "./log.js";
 import { startRuntime } from "./runtime.js";
-import { AUX_REQUEST_KIND_HEADER } from "./server.js";
+import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER } from "./server.js";
 
 const log = createLogger("plugin");
 
@@ -47,18 +47,25 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
     });
   }
 
-  if (runtime.options.setSmallModel) {
-    // v2 has no `small_model`, so v1's trick of pointing titling at the local titler
-    // by id has no equivalent — and the title request's model is read-only here. Its
-    // headers are not, so we mark the kind and let the proxy answer locally. A second
-    // M365 conversation per session is exactly the throttle signature; see models.ts.
-    await ctx.session.hook("model.request", (event) => {
-      if (event.kind !== "title") return;
-      if (event.model.providerID !== PROVIDER_ID) return;
-      if (isLocalModel(event.model.id)) return;
-      event.headers[AUX_REQUEST_KIND_HEADER] = event.kind;
-    });
-  }
+  // v2 has no `small_model`, so v1's trick of pointing titling at the local titler
+  // by id has no equivalent — and the title request's model is read-only here. Its
+  // headers are not, so we mark the kind and let the proxy answer locally. A second
+  // M365 conversation per session is exactly the throttle signature; see models.ts.
+  //
+  // The same hook names the session on primary requests, so the proxy keys its M365
+  // conversation on opencode's session rather than on the opening message — two
+  // sessions that both start "fix the failing tests" must not share one.
+  await ctx.session.hook("model.request", (event) => {
+    if (event.model.providerID !== PROVIDER_ID) return;
+    if (event.kind === "primary" && event.sessionID) {
+      event.headers[SESSION_ID_HEADER] = String(event.sessionID);
+      return;
+    }
+    if (!runtime.options.setSmallModel) return;
+    if (event.kind !== "title") return;
+    if (isLocalModel(event.model.id)) return;
+    event.headers[AUX_REQUEST_KIND_HEADER] = event.kind;
+  });
 
   log.info(`Microsoft 365 Copilot ready at ${runtime.baseUrl}`);
 

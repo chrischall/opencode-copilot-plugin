@@ -50,6 +50,13 @@ let warnedAboutToolSelection = false;
  */
 export const AUX_REQUEST_KIND_HEADER = "x-m365-request-kind";
 
+/**
+ * Header a harness uses to name the session a request belongs to, so two sessions
+ * that happen to open with the same message never share an M365 conversation.
+ * Lowercase for the same reason as {@link AUX_REQUEST_KIND_HEADER}.
+ */
+export const SESSION_ID_HEADER = "x-m365-session-id";
+
 export interface ServerDeps {
   /** Supplies a Sydney chat token. */
   getToken: () => Promise<string>;
@@ -115,6 +122,8 @@ export function generateApiKey(): string {
 
 interface Conversation extends ConversationState {
   session?: CopilotSession;
+  /** Tail of this conversation's turn queue: one M365 session runs one turn at a time. */
+  turn?: Promise<void>;
 }
 
 export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
@@ -306,7 +315,36 @@ async function handleChatCompletion(
     return;
   }
 
-  const conversation = context.pool.resolve(body.messages) as Conversation;
+  const sessionHeader = request.headers[SESSION_ID_HEADER];
+  const sessionId = typeof sessionHeader === "string" && sessionHeader !== "" ? sessionHeader : undefined;
+  const conversation = context.pool.resolve(body.messages, sessionId ? { sessionId } : {}) as Conversation;
+
+  // Serialise turns per conversation: two overlapping requests on one CopilotSession
+  // would race its turn index and our sent-message count.
+  const previous = conversation.turn ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => (release = resolve));
+  conversation.turn = previous.then(() => current);
+  await previous;
+  try {
+    await runTurn(request, response, context, body, conversation, model, tools);
+  } finally {
+    release();
+  }
+}
+
+async function runTurn(
+  request: IncomingMessage,
+  response: ServerResponse,
+  context: Context,
+  body: ChatRequest,
+  conversation: Conversation,
+  model: ReturnType<typeof resolveModel>,
+  tools: ToolDef[],
+): Promise<void> {
+  // The pool's restart check ran before we queued; re-run it now that the previous
+  // turn has recorded what it sent.
+  if (body.messages.length < conversation.sentMessageCount) conversation.sentMessageCount = 0;
   conversation.session ??= new CopilotSession({
     getToken: context.deps.getToken,
     ...(context.deps.endpoint ? { endpoint: context.deps.endpoint } : {}),
@@ -343,7 +381,9 @@ async function handleChatCompletion(
         : {}),
     });
 
-    conversation.sentMessageCount = body.messages.length;
+    // +1 for the reply the client is about to append to its history: M365 already
+    // has that turn, and sending it back would paste its own answer in as user input.
+    conversation.sentMessageCount = body.messages.length + 1;
 
     if (!streaming) {
       sendJson(response, 200, buildCompletion(result, { model: model.id, tools, allowMultiple: context.deps.allowMultiTool ?? false }));

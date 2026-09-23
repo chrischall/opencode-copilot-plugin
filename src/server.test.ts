@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem, throttling, type StubServer } from "../test/stub-copilot.js";
 import { AuthRequiredError } from "./auth.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
-import { AUX_REQUEST_KIND_HEADER, startServer, type ProxyHandle } from "./server.js";
+import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER, startServer, type ProxyHandle } from "./server.js";
 
 function fakeToken(oid = "oid", tid = "tid"): string {
   const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -389,6 +389,55 @@ describe("conversation reuse", () => {
     const text = stub.last().frames.find((f) => f.type === 4).arguments[0].message.text;
     expect(text).toContain("UNIQUESECOND");
     expect(text).not.toContain("UNIQUEFIRST");
+  });
+});
+
+describe("follow-up turns", () => {
+  it("does not paste M365's own previous reply back to it as user input", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("FIRSTREPLY"), completion()] });
+    const { url } = await start();
+    const first = [{ role: "user", content: "UNIQUEFIRST" }];
+    await post(url, { messages: first });
+    await post(url, {
+      messages: [...first, { role: "assistant", content: "FIRSTREPLY" }, { role: "user", content: "UNIQUESECOND" }],
+    });
+
+    const text = stub.last().frames.find((f) => f.type === 4).arguments[0].message.text;
+    expect(text).toContain("UNIQUESECOND");
+    expect(text).not.toContain("FIRSTREPLY");
+  });
+
+  it("gives each named session its own M365 conversation, even with the same opener", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    const send = (session: string) =>
+      authedFetch(`${url}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", [SESSION_ID_HEADER]: session },
+        body: JSON.stringify({ messages: [{ role: "user", content: "fix the failing tests" }] }),
+      });
+    await send("ses_a");
+    await send("ses_b");
+
+    const ids = stub.connections.map((c) => new URL(c.url, "http://x").searchParams.get("ConversationId"));
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("runs overlapping turns of one conversation one after the other", async () => {
+    // Without serialising, the second turn reads the sent-count before the first
+    // has recorded it and re-sends the opening message.
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()], delayMs: 50 });
+    const { url } = await start();
+    const first = [{ role: "user", content: "UNIQUEFIRST" }];
+    await Promise.all([
+      post(url, { messages: first }),
+      post(url, { messages: [...first, { role: "assistant", content: "ok" }, { role: "user", content: "UNIQUESECOND" }] }),
+    ]);
+
+    const texts = stub.connections.flatMap((c) => c.frames.filter((f) => f.type === 4)).map((f) => f.arguments[0].message.text);
+    const second = texts.find((text: string) => text.includes("UNIQUESECOND"));
+    expect(second).toBeDefined();
+    expect(second).not.toContain("UNIQUEFIRST");
   });
 });
 
