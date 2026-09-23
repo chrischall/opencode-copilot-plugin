@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.0...v0.3.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **proxy:** lock the loopback proxy to opencode and fix conversation, setup and permission bugs ([#48](https://github.com/chrischall/opencode-copilot-plugin/issues/48)) ([6bae8f6](https://github.com/chrischall/opencode-copilot-plugin/commit/6bae8f67b11fa2f88c42cd5fb52e7117879c4690))
+* stop chmodding $HOME, set the debug log up once, and retire allowedOrigins ([#51](https://github.com/chrischall/opencode-copilot-plugin/issues/51)) ([b1d0002](https://github.com/chrischall/opencode-copilot-plugin/commit/b1d000286ae87075635ec7b27a4d267ddea09d2c))
+
 ## [0.3.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.2.2...v0.3.0) (2026-09-21)
 
 
