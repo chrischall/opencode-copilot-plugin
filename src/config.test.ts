@@ -455,6 +455,30 @@ describe("merging into an on-disk opencode.json", () => {
       );
       expect(merged.plugin).toEqual([["/gone/elsewhere/dist/plugin.mjs", { strict: true }], "/checkout/dist/plugin.mjs"]);
     });
+
+    it("takes a vanished option-less entry as our stale copy, in both keys", () => {
+      // Deliberate, and the one case a foreign plugin can lose its entry: setup writes
+      // a bare entry unless the user added options, so a moved checkout usually leaves
+      // exactly this. Keeping it would leave opencode loading a file that is gone —
+      // and a vanished foreign entry was already failing to load.
+      const merged = mergeOpencodeConfig(
+        { plugin: ["/gone/elsewhere/dist/plugin.mjs"], plugins: ["/gone/elsewhere"] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
+      );
+      expect(merged.plugin).toEqual(["/checkout/dist/plugin.mjs"]);
+      expect(merged.plugins).toEqual(["/checkout"]);
+    });
+
+    it("keeps a vanished entry whose options mix ours with someone else's", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: [["/gone/elsewhere/dist/plugin.mjs", { lean: true, strict: true }]] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
+      );
+      expect(merged.plugin).toEqual([
+        ["/gone/elsewhere/dist/plugin.mjs", { lean: true, strict: true }],
+        "/checkout/dist/plugin.mjs",
+      ]);
+    });
   });
 
   it("uses the package name for both keys when installed from npm", () => {
