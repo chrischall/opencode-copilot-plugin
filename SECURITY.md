@@ -7,9 +7,15 @@ Your Microsoft 365 credentials and the access tokens derived from them. Specific
 - `~/.config/opencode-copilot/msal-cache.json` — the MSAL token cache, including refresh
   tokens. Written owner-only (`0600`).
 - `~/.config/opencode-copilot/secrets.json` — optional stored credentials and TOTP seed,
-  if you choose the headless sign-in path.
+  if you choose the headless sign-in path. That is both factors in one plaintext file:
+  reading it is enough to pass MFA as you. A copy readable by other users is tightened
+  to `0600` (with a warning) before it is used, and refused if it cannot be.
 - `~/.config/opencode-copilot/browser-profile/` — a persistent browser profile holding
   Entra device/SSO cookies.
+- `~/.config/opencode-copilot/debug.log` — written only under `M365_DEBUG`/`M365_TRACE`.
+
+The directory and the browser profile are created (and, if they already exist,
+tightened to) owner-only `0700`; every file written in it is `0600`.
 
 The local proxy binds to loopback only, and loopback alone is not a boundary — every
 web page open in your browser can reach `127.0.0.1` too. So the proxy also:

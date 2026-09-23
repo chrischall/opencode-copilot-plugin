@@ -217,6 +217,10 @@ Two ways to sign in:
   `~/.config/opencode-copilot/secrets.json`. `mfaSecret` is the **base32 seed** your
   authenticator derives codes from (`JBSWY3DPEHPK3PXP`), not a 6-digit code. Most password
   managers will show it; an `otpauth://` URI is accepted and the seed extracted.
+  That file holds **both** sign-in factors — anyone who can read it can pass MFA as you —
+  so keep it `chmod 600` (the CLI tightens a looser file itself and warns), keep it off
+  backups and synced folders, and prefer interactive sign-in if you can. It is only read
+  by `opencode-m365 login`; you can delete it once you have signed in.
 - **Interactive** — `opencode-m365 login --interactive` opens a window and you complete
   SSO/MFA by hand once. Required for tenants with push-only MFA, FIDO2, or a federated IdP
   (Okta/Ping/Duo), where no seed exists to extract.

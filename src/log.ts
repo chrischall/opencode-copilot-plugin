@@ -1,12 +1,9 @@
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { CONFIG_DIR, LOG_FILE } from "./paths.js";
+import { LOG_FILE } from "./paths.js";
+import { appendPrivateFile } from "./private-fs.js";
 
 const DEBUG = process.env.M365_DEBUG === "1" || process.env.M365_TRACE === "1";
 const TRACE = process.env.M365_TRACE === "1";
 const TO_STDOUT = process.env.M365_LOG_STDOUT === "1";
-
-let ready = false;
 
 /** Truncate a payload for the log unless full tracing is on. */
 export function trunc(value: unknown, max = 400): string {
@@ -33,11 +30,8 @@ export function createLogger(scope: string): Logger {
     const line = `${new Date().toISOString()} [${level}] [${scope}] ${parts.map((p) => trunc(p)).join(" ")}`;
     if (TO_STDOUT) process.stdout.write(`${line}\n`);
     try {
-      if (!ready) {
-        mkdirSync(dirname(LOG_FILE) || CONFIG_DIR, { recursive: true });
-        ready = true;
-      }
-      appendFileSync(LOG_FILE, `${line}\n`);
+      // Owner-only: under M365_TRACE this log carries the access token.
+      appendPrivateFile(LOG_FILE, `${line}\n`);
     } catch {
       /* logging must never take the caller down */
     }

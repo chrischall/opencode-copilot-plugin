@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,6 +32,29 @@ describe("stored credentials", () => {
 
   it("reports invalid JSON clearly", () => {
     expect(() => loadSecrets(tempFile("{not json"))).toThrow(/not valid JSON/);
+  });
+
+  describe.runIf(process.platform !== "win32")("file permissions", () => {
+    // The password and the TOTP seed together are both factors: anyone who can read
+    // this file can complete MFA as the user.
+    const valid = JSON.stringify({ email: "a@b.com", password: "pw", mfaSecret: "JBSWY3DPEHPK3PXP" });
+
+    it("tightens a group- or world-readable secrets file to 0600 and says so", () => {
+      const file = tempFile(valid);
+      chmodSync(file, 0o644);
+      const warnings: string[] = [];
+      expect(loadSecrets(file, { warn: (message) => warnings.push(message) })?.email).toBe("a@b.com");
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(warnings.join("\n")).toMatch(/0600|readable/);
+    });
+
+    it("stays quiet about a file that is already owner-only", () => {
+      const file = tempFile(valid);
+      chmodSync(file, 0o600);
+      const warnings: string[] = [];
+      loadSecrets(file, { warn: (message) => warnings.push(message) });
+      expect(warnings).toEqual([]);
+    });
   });
 });
 
