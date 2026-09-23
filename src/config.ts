@@ -526,8 +526,10 @@ function specifierOf(entry: unknown): string {
  *
  * - a path that exists is ours only if its package.json names this package;
  * - a path that no longer exists (the usual moved-checkout case) is taken as a stale
- *   copy of us only when every option on it is one of ours — so another plugin's
- *   entry, and its options, are never swallowed.
+ *   copy of us when it carries no options, or only ours — so another plugin's options
+ *   are never swallowed. An option-less vanished entry is taken even if it was someone
+ *   else's: setup writes a bare entry by default, so that is what a moved checkout of
+ *   ours usually leaves, and a foreign one was already failing to load.
  */
 function isOurPluginRef(
   ref: string,
@@ -541,6 +543,7 @@ function isOurPluginRef(
 
   const info = inspect(ref);
   if (info.exists) return info.packageName === PACKAGE_NAME;
+  // No options at all counts as ours — see the doc comment for why.
   return Object.keys(options ?? {}).every((key) => OUR_OPTION_KEYS.has(key));
 }
 
