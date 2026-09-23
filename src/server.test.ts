@@ -170,16 +170,36 @@ describe("who may call the proxy", () => {
     expect(stub.connections).toHaveLength(0);
   });
 
-  it("accepts an Origin the caller explicitly allowed", async () => {
-    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
-    const { url } = await start({ allowedOrigins: ["http://localhost:3000"] });
-    const response = await rawRequest(url, {
-      method: "POST",
-      path: "/v1/chat/completions",
-      headers: { Origin: "http://localhost:3000", Authorization: `Bearer ${proxy!.apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(chat),
-    });
-    expect(response.status).toBe(200);
+  it("ignores the retired allowedOrigins option with a warning, still refusing the Origin", async () => {
+    // Allowlisting an Origin could never make the proxy usable from a web page: the
+    // bearer header forces a preflight, and preflights are always refused. So the
+    // option is gone; an old caller that still passes it keeps starting, and learns why.
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+      const { url } = await start({ allowedOrigins: ["http://localhost:3000"] });
+      const response = await rawRequest(url, {
+        method: "POST",
+        path: "/v1/chat/completions",
+        headers: { Origin: "http://localhost:3000", Authorization: `Bearer ${proxy!.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify(chat),
+      });
+      expect(response.status).toBe(403);
+      expect(stub.connections).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/allowedOrigins/), expect.objectContaining({ type: "DeprecationWarning" }));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("does not warn when allowedOrigins is not passed", async () => {
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      await start();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("refuses a CORS preflight and grants no CORS headers", async () => {

@@ -94,8 +94,11 @@ export interface ServerDeps {
    */
   apiKey?: string;
   /**
-   * Browser origins allowed to call the proxy. Empty by default: opencode sends no
-   * `Origin`, and any request that carries one came from a web page.
+   * @deprecated Ignored, with a warning. Every request carrying an `Origin` is refused:
+   * opencode sends none, so one means a web page — and no allowlist could have made
+   * the proxy usable from a page anyway, since the bearer header forces a CORS
+   * preflight and preflights are always refused. Kept only so an old caller that
+   * still passes it keeps starting.
    */
   allowedOrigins?: readonly string[];
   /** Largest request body accepted, in bytes. */
@@ -133,7 +136,12 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     throw new Error(`Refusing to bind ${host}: the proxy only listens on loopback (127.0.0.1, ::1, localhost)`);
   }
   const apiKey = deps.apiKey || generateApiKey();
-  const allowedOrigins = new Set(deps.allowedOrigins ?? []);
+  if (deps.allowedOrigins !== undefined) {
+    process.emitWarning(
+      "startServer's allowedOrigins option is ignored: the proxy refuses every request carrying an Origin, since browsers cannot use it.",
+      { type: "DeprecationWarning", code: "M365_ALLOWED_ORIGINS" },
+    );
+  }
   const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   // Resolved once, then reused: provisioning an agent is slow and only the first
@@ -152,7 +160,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
 
   const portOf = () => (server.address() as AddressInfo).port;
   const server = createServer((request, response) => {
-    handle(request, response, { deps, pool, agentId, apiKey, allowedOrigins, maxBodyBytes, port: portOf() }).catch((error) => {
+    handle(request, response, { deps, pool, agentId, apiKey, maxBodyBytes, port: portOf() }).catch((error) => {
       log.error("unhandled request failure", String(error));
       sendError(response, 500, "internal_error", String(error));
     });
@@ -182,7 +190,6 @@ interface Context {
   pool: ConversationPool;
   agentId: () => Promise<string | null>;
   apiKey: string;
-  allowedOrigins: ReadonlySet<string>;
   maxBodyBytes: number;
   port: number;
 }
@@ -223,8 +230,8 @@ async function handle(request: IncomingMessage, response: ServerResponse, contex
     return;
   }
 
-  const origin = request.headers.origin;
-  if (origin !== undefined && !context.allowedOrigins.has(origin)) {
+  // opencode sends no Origin; a request carrying one came from a web page.
+  if (request.headers.origin !== undefined) {
     sendError(response, 403, "forbidden", "Browser origins may not use this proxy");
     return;
   }
