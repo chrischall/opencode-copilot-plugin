@@ -16,12 +16,13 @@
  * Either way it is a one-time cost — afterwards `auth.ts` refreshes silently.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { AUTHORITY, CLIENT_ID, REDIRECT_URI, SYDNEY_SCOPES, authCodeFromUrl, createCachePlugin } from "./auth.js";
 import { CONFIG_DIR, SECRETS_FILE } from "./paths.js";
 import { createLogger } from "./log.js";
+import { ensurePrivateDir } from "./private-fs.js";
 
 const log = createLogger("login");
 
@@ -37,9 +38,18 @@ const SecretsSchema = z.object({
 
 export type Secrets = z.infer<typeof SecretsSchema>;
 
-/** Read stored credentials, if any. Returns undefined when the file is absent. */
-export function loadSecrets(file: string = SECRETS_FILE): Secrets | undefined {
+/**
+ * Read stored credentials, if any. Returns undefined when the file is absent.
+ *
+ * The file holds both sign-in factors, so a copy other local users can read is
+ * tightened to 0600 on the spot, with a warning. A file we cannot tighten is refused.
+ */
+export function loadSecrets(
+  file: string = SECRETS_FILE,
+  { warn = (message: string) => console.warn(message) }: { warn?: (message: string) => void } = {},
+): Secrets | undefined {
   if (!existsSync(file)) return undefined;
+  guardSecretsMode(file, warn);
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
@@ -51,6 +61,22 @@ export function loadSecrets(file: string = SECRETS_FILE): Secrets | undefined {
     throw new Error(`${file} is missing required fields: ${result.error.issues.map((i) => i.path.join(".")).join(", ")}`);
   }
   return result.data;
+}
+
+function guardSecretsMode(file: string, warn: (message: string) => void): void {
+  if (process.platform === "win32") return;
+  const mode = statSync(file).mode & 0o777;
+  if ((mode & 0o077) === 0) return;
+  try {
+    chmodSync(file, 0o600);
+  } catch (error) {
+    throw new Error(
+      `${file} is readable by other users (mode ${mode.toString(8)}) and could not be tightened: ${String(error)}. Run \`chmod 600 ${file}\`.`,
+    );
+  }
+  warn(
+    `${file} was readable by other users (mode ${mode.toString(8)}); it holds your password and TOTP seed, so it has been changed to 0600.`,
+  );
 }
 
 /**
@@ -144,10 +170,12 @@ async function captureAuthCode(
   const playwright = await importPlaywright();
   const timeout = options.timeoutMs ?? (options.interactive ? 600_000 : 120_000);
 
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  ensurePrivateDir(CONFIG_DIR);
   // A persistent profile keeps AAD's device cookies, so repeat logins are quiet and
   // look like a familiar device rather than a fresh unknown one every time.
   const profileDir = process.env.M365_BROWSER_PROFILE || join(CONFIG_DIR, "browser-profile");
+  // It holds Entra SSO cookies.
+  ensurePrivateDir(profileDir);
 
   const context = await playwright.chromium.launchPersistentContext(profileDir, {
     headless: !options.interactive,

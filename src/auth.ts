@@ -13,11 +13,11 @@
  * is the only door, which is why `login.ts` has to drive a real browser.
  */
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import type { ICachePlugin, TokenCacheContext } from "@azure/msal-node";
 import { CACHE_FILE } from "./paths.js";
 import { createLogger } from "./log.js";
+import { writePrivateFile } from "./private-fs.js";
 
 const log = createLogger("auth");
 
@@ -68,9 +68,7 @@ export function createCachePlugin(file: string = CACHE_FILE): ICachePlugin {
     async afterCacheAccess(context: TokenCacheContext): Promise<void> {
       if (!context.cacheHasChanged) return;
       try {
-        mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(file, context.tokenCache.serialize(), { mode: 0o600 });
-        chmodSync(file, 0o600);
+        writePrivateFile(file, context.tokenCache.serialize());
       } catch (error) {
         log.warn("could not persist the token cache", String(error));
       }

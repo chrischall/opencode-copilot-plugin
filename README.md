@@ -162,10 +162,16 @@ records are checked against the real `@opencode/plugin` schema constructors. It 
     "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
     "setDefaultModel": true,   // set `model` if you have not (default: true)
     "setSmallModel": true,     // route title generation to the local titler (default: true)
-    "baseUrl": null            // use an already-running proxy instead of an in-process one
+    "baseUrl": null,           // use an already-running proxy instead of an in-process one
+    "apiKey": null             // that proxy's secret (or export M365_PROXY_KEY instead)
   }]]
 }
 ```
+
+The in-process proxy needs no key configured: it mints a random secret each launch and
+hands it to opencode itself. Only a standalone `opencode-m365 serve` proxy needs one —
+`serve` prints its key, or takes a fixed one from `M365_PROXY_KEY`. Either put that key
+in `apiKey`, or export the same `M365_PROXY_KEY` to opencode and leave `apiKey` out.
 
 On opencode 2 the same block goes under `plugins`, as `{ "package": ..., "options": ... }`.
 
@@ -211,6 +217,10 @@ Two ways to sign in:
   `~/.config/opencode-copilot/secrets.json`. `mfaSecret` is the **base32 seed** your
   authenticator derives codes from (`JBSWY3DPEHPK3PXP`), not a 6-digit code. Most password
   managers will show it; an `otpauth://` URI is accepted and the seed extracted.
+  That file holds **both** sign-in factors — anyone who can read it can pass MFA as you —
+  so keep it `chmod 600` (the CLI tightens a looser file itself and warns), keep it off
+  backups and synced folders, and prefer interactive sign-in if you can. It is only read
+  by `opencode-m365 login`; you can delete it once you have signed in.
 - **Interactive** — `opencode-m365 login --interactive` opens a window and you complete
   SSO/MFA by hand once. Required for tenants with push-only MFA, FIDO2, or a federated IdP
   (Okta/Ping/Duo), where no seed exists to extract.
@@ -231,14 +241,17 @@ which belongs to the m365-copilot-proxy project.
 opencode-m365 login [--interactive]   # sign in
 opencode-m365 setup [--local]         # register the plugin with opencode
 opencode-m365 serve [--port 4141]     # run the proxy standalone, for any OpenAI client
+                                      # (send its key as `Authorization: Bearer`)
 opencode-m365 doctor                  # check auth, agent, proxy and opencode wiring
 ```
 
 ## Limits
 
-- **600 user messages per conversation.** The proxy reuses one conversation per task and
+- **600 user messages per conversation.** The proxy reuses one conversation per task,
   sends only new messages, and reports the remaining budget in
-  `usage.x_m365_conversation_remaining`.
+  `usage.x_m365_conversation_remaining`. A task is the opencode session on opencode 2,
+  or the system prompt plus the first user message otherwise; turns within one task run
+  one at a time.
 - **Account-level throttling** exists and is keyed to your identity, so re-authenticating
   does not clear it. It self-heals after a lull.
 - **Streaming** works for tool-less turns. A tool turn is buffered, because a fenced call

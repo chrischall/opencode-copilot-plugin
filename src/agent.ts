@@ -23,11 +23,11 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
 import { BAP_SCOPE, POWERPLATFORM_SCOPE } from "./auth.js";
 import { AGENT_FILE } from "./paths.js";
 import { createLogger } from "./log.js";
+import { writePrivateFile } from "./private-fs.js";
 
 const log = createLogger("agent");
 
@@ -287,8 +287,7 @@ function readCache(file: string): AgentCache | undefined {
 
 function writeCache(file: string, cache: AgentCache): void {
   try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, `${JSON.stringify(cache, null, 2)}\n`);
+    writePrivateFile(file, `${JSON.stringify(cache, null, 2)}\n`);
   } catch (error) {
     // A cache miss costs one extra round trip, not correctness.
     log.warn("could not write the agent cache", String(error));

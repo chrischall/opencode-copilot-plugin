@@ -66,6 +66,28 @@ describe("conversation pool", () => {
     expect(second).not.toBe(first);
   });
 
+  it("keeps two sessions apart that open with the same message, when the harness names them", () => {
+    // "fix the failing tests" in two sessions must not share one M365 conversation.
+    const pool = new ConversationPool();
+    const a = pool.resolve([user("fix the failing tests")], { sessionId: "ses_a" });
+    const b = pool.resolve([user("fix the failing tests")], { sessionId: "ses_b" });
+    expect(b).not.toBe(a);
+    expect(pool.resolve([user("fix the failing tests"), user("more")], { sessionId: "ses_a" })).toBe(a);
+  });
+
+  it("keeps apart the same opener under different system prompts, e.g. two repos", () => {
+    const pool = new ConversationPool();
+    const a = pool.resolve([system("cwd: /repo/one"), user("fix the failing tests")]);
+    const b = pool.resolve([system("cwd: /repo/two"), user("fix the failing tests")]);
+    expect(b).not.toBe(a);
+  });
+
+  it("does not collide on a 32-bit hash", () => {
+    // "Aa" and "BB" share a Java-style string hash; so do these longer strings.
+    const pool = new ConversationPool();
+    expect(pool.resolve([user("AaAa")])).not.toBe(pool.resolve([user("BBBB")]));
+  });
+
   it("resets when the history shrinks, which means the client started over", () => {
     const pool = new ConversationPool();
     const state = pool.resolve([user("task"), { role: "assistant", content: "a" }, user("more")]);
