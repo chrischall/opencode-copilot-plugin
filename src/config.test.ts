@@ -408,6 +408,55 @@ describe("merging into an on-disk opencode.json", () => {
     expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
   });
 
+  describe("telling our stale entries from someone else's local plugin", () => {
+    // `dist/plugin.mjs` is a very common build layout; a shared path tail proves nothing.
+    const fs = (packages: Record<string, string | null>) => ({
+      inspect: (path: string) => {
+        const dir = path.replace(/\/dist\/plugin\.mjs$/, "");
+        if (!(dir in packages)) return { exists: false };
+        const name = packages[dir];
+        return name === null ? { exists: true } : { exists: true, packageName: name };
+      },
+    });
+
+    it("keeps another local plugin that shares the dist/plugin.mjs layout, with its options", () => {
+      const merged = mergeOpencodeConfig(
+        {
+          plugin: [["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }]],
+          plugins: [{ package: "/Users/x/other-plugin", options: { strict: true } }],
+        },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/Users/x/other-plugin": "other-plugin" }) },
+      );
+      expect(merged.plugin).toEqual([["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }], "/checkout/dist/plugin.mjs"]);
+      expect(merged.plugins).toEqual([{ package: "/Users/x/other-plugin", options: { strict: true } }, "/checkout"]);
+    });
+
+    it("keeps an existing local plugin whose package it cannot identify", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: ["/Users/x/mystery/dist/plugin.mjs"] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/Users/x/mystery": null }) },
+      );
+      expect(merged.plugin).toEqual(["/Users/x/mystery/dist/plugin.mjs", "/checkout/dist/plugin.mjs"]);
+    });
+
+    it("replaces an existing checkout whose package.json says it is us", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: [["/old/place/dist/plugin.mjs", { lean: false }]], plugins: [{ package: "/old/place", options: { lean: false } }] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/old/place": "opencode-m365-copilot" }) },
+      );
+      expect(merged.plugin).toEqual([["/checkout/dist/plugin.mjs", { lean: false }]]);
+      expect(merged.plugins).toEqual([{ package: "/checkout", options: { lean: false } }]);
+    });
+
+    it("keeps a vanished plugin whose options are not ours to take", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: [["/gone/elsewhere/dist/plugin.mjs", { strict: true }]] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
+      );
+      expect(merged.plugin).toEqual([["/gone/elsewhere/dist/plugin.mjs", { strict: true }], "/checkout/dist/plugin.mjs"]);
+    });
+  });
+
   it("uses the package name for both keys when installed from npm", () => {
     const merged = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
     expect(merged.plugin).toEqual(["opencode-m365-copilot"]);

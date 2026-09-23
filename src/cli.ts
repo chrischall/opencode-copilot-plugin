@@ -7,13 +7,13 @@
  * happens, plus the one-time config write.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTokenClient } from "./auth.js";
 import { getOrCreateAgent } from "./agent.js";
-import { PROVIDER_ID, mergeOpencodeConfig } from "./config.js";
+import { PROVIDER_ID, mergeOpencodeConfig, type PluginPathInfo } from "./config.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
 import { startServer } from "./server.js";
 import { AGENT_FILE, CACHE_FILE, CONFIG_DIR, SECRETS_FILE } from "./paths.js";
@@ -105,11 +105,16 @@ async function doSetup(args: string[]): Promise<void> {
     }
   }
 
-  const merged = mergeOpencodeConfig(existing, { pluginRef, pluginDir });
+  const merged = mergeOpencodeConfig(existing, { pluginRef, pluginDir, inspect: inspectPluginPath });
   mkdirSync(dirname(OPENCODE_CONFIG), { recursive: true });
+  // It is the user's file, not ours: keep what was there before we rewrite it.
+  const backup = `${OPENCODE_CONFIG}.bak`;
+  const hadConfig = existsSync(OPENCODE_CONFIG);
+  if (hadConfig) copyFileSync(OPENCODE_CONFIG, backup);
   writeFileSync(OPENCODE_CONFIG, `${JSON.stringify(merged, null, 2)}\n`);
 
   console.log(`Added ${pluginRef} to ${OPENCODE_CONFIG}`);
+  if (hadConfig) console.log(`(previous version saved as ${backup})`);
   console.log(`\nThe plugin registers the provider itself on startup, so there is nothing`);
   console.log(`else to configure. Models appear as ${PROVIDER_ID}/<model>, defaulting to`);
   console.log(`${PROVIDER_ID}/${DEFAULT_MODEL}.`);
@@ -117,6 +122,21 @@ async function doSetup(args: string[]): Promise<void> {
   console.log(`selected. M365 refuses to engage with a full coding-agent toolset — see the`);
   console.log(`README. Pass { "lean": false } in the plugin options to opt out.`);
   console.log(`\nCheck it with: opencode models | grep ${PROVIDER_ID}`);
+}
+
+/** Which package owns a local plugin path: its own dir or the one above (`dist/`). */
+function inspectPluginPath(path: string): PluginPathInfo {
+  if (!existsSync(path)) return { exists: false };
+  const start = path.endsWith(".mjs") || path.endsWith(".js") ? dirname(path) : path;
+  for (const dir of [start, dirname(start)]) {
+    try {
+      const name = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"))?.name;
+      if (typeof name === "string") return { exists: true, packageName: name };
+    } catch {
+      /* no package.json here; try one level up */
+    }
+  }
+  return { exists: true };
 }
 
 async function doServe(args: string[]): Promise<void> {

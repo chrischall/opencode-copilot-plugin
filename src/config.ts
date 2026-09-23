@@ -400,19 +400,49 @@ function usesOurProvider(config: Record<string, any>): boolean {
  * v2 swallows plugin load failures nothing else reports it. `pluginDir` is that
  * directory. An npm install needs neither, because the package name serves both.
  */
+/** What the filesystem says about a plugin path in the config. */
+export interface PluginPathInfo {
+  exists: boolean;
+  /** The `name` in the package.json that owns the path, when one could be read. */
+  packageName?: string;
+}
+
+/** The npm name this package publishes under — what a checkout's package.json says. */
+export const PACKAGE_NAME = "opencode-m365-copilot";
+
+/** Every option key this plugin reads; anything else belongs to another plugin. */
+const OUR_OPTION_KEYS: ReadonlySet<string> = new Set<keyof PluginOptions>([
+  "lean",
+  "setDefaultModel",
+  "setSmallModel",
+  "leanSystemPrompt",
+  "baseUrl",
+  "apiKey",
+]);
+
 export function mergeOpencodeConfig(
   existing: Record<string, any>,
-  opts: { pluginRef: string; pluginDir?: string },
+  opts: {
+    pluginRef: string;
+    pluginDir?: string;
+    /**
+     * Look a local plugin path up on disk. The CLI passes a real one; without it every
+     * path is treated as vanished, which is the conservative reading below.
+     */
+    inspect?: (path: string) => PluginPathInfo;
+  },
 ): Record<string, any> {
   const merged: Record<string, any> = { ...existing };
   merged.$schema ??= "https://opencode.ai/config.json";
   const pluginDir = opts.pluginDir ?? opts.pluginRef;
 
-  const v1 = withOurRef(merged.plugin, opts.pluginRef);
+  const inspect = opts.inspect ?? (() => ({ exists: false }));
+
+  const v1 = withOurRef(merged.plugin, opts.pluginRef, inspect);
   // A stale v2 entry is a bare directory, so its name says nothing about us — but it
   // is the directory that *contains* the stale v1 entrypoint we just dropped, and
   // that does. Anything else is somebody else's plugin and stays.
-  const v2 = withOurRef(merged.plugins, pluginDir, v1.dropped);
+  const v2 = withOurRef(merged.plugins, pluginDir, inspect, v1.dropped);
 
   // Options ride on the entry, so replacing ours would otherwise silently undo a
   // `{ "lean": false }` the user set by hand. The two versions spell the entry
@@ -432,6 +462,7 @@ export function mergeOpencodeConfig(
 function withOurRef(
   existing: unknown,
   pluginRef: string,
+  inspect: (path: string) => PluginPathInfo,
   containing: readonly string[] = [],
 ): { kept: unknown[]; dropped: string[]; options?: Record<string, unknown> } {
   const entries: unknown[] = Array.isArray(existing) ? [...existing] : [];
@@ -441,7 +472,8 @@ function withOurRef(
 
   for (const entry of entries) {
     const spec = specifierOf(entry);
-    const ours = isOurPluginRef(spec, pluginRef) || containing.some((path) => isWithin(spec, path));
+    const ours =
+      isOurPluginRef(spec, pluginRef, optionsOf(entry), inspect) || containing.some((path) => isWithin(spec, path));
     if (!ours) {
       kept.push(entry);
       continue;
@@ -488,14 +520,28 @@ function specifierOf(entry: unknown): string {
 /**
  * Does `ref` point at this plugin?
  *
- * Three ways it can: the npm package name, this repo's directory name, or the same
- * build artifact at a different location — a local install is an absolute path to
- * `.../dist/plugin.mjs`, and only the directory changes when the checkout moves.
+ * Certain when it is the npm package name or this repo's directory name. A local
+ * install is an absolute path to `.../dist/plugin.mjs`, but that layout is common to
+ * many plugins, so a shared path tail alone proves nothing:
+ *
+ * - a path that exists is ours only if its package.json names this package;
+ * - a path that no longer exists (the usual moved-checkout case) is taken as a stale
+ *   copy of us only when every option on it is one of ours — so another plugin's
+ *   entry, and its options, are never swallowed.
  */
-function isOurPluginRef(ref: string, incoming: string): boolean {
+function isOurPluginRef(
+  ref: string,
+  incoming: string,
+  options: Record<string, unknown> | undefined,
+  inspect: (path: string) => PluginPathInfo,
+): boolean {
   if (ref === incoming) return true;
-  if (ref.includes("opencode-m365-copilot") || ref.includes("opencode-copilot-plugin")) return true;
-  return tail(ref) !== "" && tail(ref) === tail(incoming);
+  if (ref.includes(PACKAGE_NAME) || ref.includes("opencode-copilot-plugin")) return true;
+  if (tail(ref) === "" || tail(ref) !== tail(incoming)) return false;
+
+  const info = inspect(ref);
+  if (info.exists) return info.packageName === PACKAGE_NAME;
+  return Object.keys(options ?? {}).every((key) => OUR_OPTION_KEYS.has(key));
 }
 
 /** The last two path segments, which for a local install are `dist/plugin.mjs`. */
