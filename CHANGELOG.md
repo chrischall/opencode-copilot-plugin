@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.2...v0.3.3) (2026-10-02)
+
+
+### Bug Fixes
+
+* **deps:** Bump @azure/msal-node from 6.0.1 to 7.0.0 in the production-majors group ([#60](https://github.com/chrischall/opencode-copilot-plugin/issues/60)) ([c8ce54d](https://github.com/chrischall/opencode-copilot-plugin/commit/c8ce54d827491d07889c34bfc0d3548b28ea8d2a))
+* **deps:** Bump ws from 8.21.3 to 8.22.0 in the production-dependencies group ([#59](https://github.com/chrischall/opencode-copilot-plugin/issues/59)) ([cfdffb7](https://github.com/chrischall/opencode-copilot-plugin/commit/cfdffb72553e57d2ed8c349f0171f41582788c44))
+
 ## [0.3.2](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.1...v0.3.2) (2026-09-24)
 
 
