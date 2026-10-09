@@ -145,14 +145,24 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
   const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   // Resolved once, then reused: provisioning an agent is slow and only the first
-  // tool request should pay for it.
+  // tool request should pay for it. A failure is cached only when it is permanent
+  // (401/403: the account has no Copilot Studio access); anything else — a network
+  // blip, a 5xx, not signed in yet — is retried on the next tool request.
   let agentPromise: Promise<string | null> | undefined;
   const agentId = async (): Promise<string | null> => {
     if (!deps.resolveAgent) return null;
     agentPromise ??= deps.resolveAgent().catch((error) => {
       // Without Copilot Studio access we still work, just less reliably: the model
       // gets the fenced contract per-request instead of server-side.
-      log.warn("could not resolve a declarative agent; continuing without one", String(error));
+      const status = (error as { status?: unknown } | null)?.status;
+      const permanent = status === 401 || status === 403;
+      log.warn(
+        permanent
+          ? "no Copilot Studio access; continuing without a declarative agent"
+          : "could not resolve a declarative agent; continuing without one and retrying next time",
+        String(error),
+      );
+      if (!permanent) agentPromise = undefined;
       return null;
     });
     return agentPromise;

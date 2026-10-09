@@ -207,4 +207,14 @@ describe("getOrCreateAgent", () => {
     });
     await expect(getOrCreateAgent(deps({ fetch }))).rejects.toThrow(/403|Forbidden/);
   });
+
+  it("carries the HTTP status on a rejection, so a caller can tell no-access from a blip", async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (String(url).includes("api.bap.microsoft.com")) {
+        return { ok: true, status: 200, json: async () => ({ name: `Default-${TENANT}` }) } as any;
+      }
+      return { ok: false, status: 403, json: async () => ({}), text: async () => "Forbidden" } as any;
+    });
+    await expect(getOrCreateAgent(deps({ fetch }))).rejects.toMatchObject({ status: 403 });
+  });
 });

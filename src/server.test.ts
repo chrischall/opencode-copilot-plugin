@@ -639,4 +639,29 @@ describe("lifecycle", () => {
     await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
     expect(resolveAgent).toHaveBeenCalledTimes(1);
   });
+
+  it("retries agent resolution after a transient failure instead of caching it forever", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const resolveAgent = vi
+      .fn<() => Promise<string | null>>()
+      .mockRejectedValueOnce(new Error("fetch failed: ECONNRESET"))
+      .mockResolvedValue("T_t.b.gpt.default");
+    const { url } = await start({ resolveAgent });
+    await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(stub.last().frames.find((f) => f.type === 4).arguments[0].threadLevelGptId).toBeUndefined();
+    await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(resolveAgent).toHaveBeenCalledTimes(2);
+    expect(stub.last().frames.find((f) => f.type === 4).arguments[0].threadLevelGptId).toBeDefined();
+  });
+
+  it("stops retrying once Copilot Studio says the account has no access", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const resolveAgent = vi.fn(async (): Promise<string | null> => {
+      throw Object.assign(new Error("M365 rejected listing agents (HTTP 403)"), { status: 403 });
+    });
+    const { url } = await start({ resolveAgent });
+    await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(resolveAgent).toHaveBeenCalledTimes(1);
+  });
 });
