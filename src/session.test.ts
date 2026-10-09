@@ -258,6 +258,31 @@ describe("failure modes", () => {
     const result = await sessionFor(stub).run("hi");
     expect(result.text).toBe("");
   });
+
+  it("rejects when the socket drops mid-answer instead of returning a truncated turn", async () => {
+    stub = await startStubCopilot({
+      respond: (_chat, connection) => {
+        setTimeout(() => connection.socket.close(1011, "server going away"), 30);
+        return [delta("partial ans")];
+      },
+    });
+    await expect(sessionFor(stub).run("hi")).rejects.toThrow(/closed before the turn completed.*1011.*server going away/);
+  });
+
+  it("rejects when the server closes before answering at all", async () => {
+    stub = await startStubCopilot({
+      respond: (_chat, connection) => {
+        setTimeout(() => connection.socket.close(1008, "policy"), 10);
+        return [];
+      },
+    });
+    await expect(sessionFor(stub).run("hi")).rejects.toThrow(/closed before the turn completed.*1008/);
+  });
+
+  it("treats a clean close frame (type 7) as the end of the turn", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("done"), { type: 7 }] });
+    expect((await sessionFor(stub).run("hi")).text).toBe("done");
+  });
 });
 
 describe("cancellation", () => {

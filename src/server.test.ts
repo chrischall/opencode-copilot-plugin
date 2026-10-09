@@ -602,6 +602,19 @@ describe("failures the client has to be able to tell apart", () => {
     const { url } = await start();
     expect((await post(url, { messages: [{ role: "user", content: "hi" }] })).status).toBe(502);
   });
+
+  it("reports a dropped connection as a 502, not an empty 200 completion", async () => {
+    stub = await startStubCopilot({
+      respond: (_chat, connection) => {
+        setTimeout(() => connection.socket.close(1011, "gone"), 20);
+        return [delta("half an ans")];
+      },
+    });
+    const { url } = await start();
+    const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(502);
+    expect(await response.text()).toMatch(/upstream_error/);
+  });
 });
 
 describe("lifecycle", () => {
@@ -621,6 +634,31 @@ describe("lifecycle", () => {
   it("resolves the agent once and reuses it", async () => {
     stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
     const resolveAgent = vi.fn(async () => "T_t.b.gpt.default");
+    const { url } = await start({ resolveAgent });
+    await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(resolveAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries agent resolution after a transient failure instead of caching it forever", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const resolveAgent = vi
+      .fn<() => Promise<string | null>>()
+      .mockRejectedValueOnce(new Error("fetch failed: ECONNRESET"))
+      .mockResolvedValue("T_t.b.gpt.default");
+    const { url } = await start({ resolveAgent });
+    await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(stub.last().frames.find((f) => f.type === 4).arguments[0].threadLevelGptId).toBeUndefined();
+    await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(resolveAgent).toHaveBeenCalledTimes(2);
+    expect(stub.last().frames.find((f) => f.type === 4).arguments[0].threadLevelGptId).toBeDefined();
+  });
+
+  it("stops retrying once Copilot Studio says the account has no access", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const resolveAgent = vi.fn(async (): Promise<string | null> => {
+      throw Object.assign(new Error("M365 rejected listing agents (HTTP 403)"), { status: 403 });
+    });
     const { url } = await start({ resolveAgent });
     await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
     await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });

@@ -174,7 +174,7 @@ async function discoverEnvironmentId(
 ): Promise<string> {
   const token = await getTokenForScope([BAP_SCOPE]);
   const response = await doFetch(BAP_ENVIRONMENT_URL, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error(await describeFailure("environment discovery", response));
+  if (!response.ok) throw new AgentHttpError(await describeFailure("environment discovery", response), response.status);
 
   const body: any = await response.json();
   const name: string = body?.name ?? "";
@@ -203,7 +203,7 @@ async function findBot(
 ): Promise<BotRef | undefined> {
   const url = `https://${host}/copilotstudio/minimalBots/api/botlist?api-version=${COPILOT_STUDIO_API_VERSION}`;
   const response = await doFetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) throw new Error(await describeFailure("listing agents", response));
+  if (!response.ok) throw new AgentHttpError(await describeFailure("listing agents", response), response.status);
 
   const body: any = await response.json();
   const bots: any[] = body?.value ?? body?.bots ?? [];
@@ -233,7 +233,7 @@ async function createBot(
       },
     }),
   });
-  if (!response.ok) throw new Error(await describeFailure("creating the agent", response));
+  if (!response.ok) throw new AgentHttpError(await describeFailure("creating the agent", response), response.status);
 
   const body: any = await response.json();
   const botId = body?.botId ?? body?.id;
@@ -253,12 +253,23 @@ async function publishBot(
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ botId }),
   });
-  if (!response.ok) throw new Error(await describeFailure("publishing the agent", response));
+  if (!response.ok) throw new AgentHttpError(await describeFailure("publishing the agent", response), response.status);
 
   const body: any = await response.json();
   const titleId = body?.titleId ?? body?.TitleId;
   if (!titleId) throw new Error("Copilot Studio published the agent but returned no title id");
   return titleId;
+}
+
+/** A Copilot Studio / Power Platform call answered with a non-2xx status. */
+export class AgentHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "AgentHttpError";
+  }
 }
 
 async function describeFailure(what: string, response: { status: number; text?: () => Promise<string> }): Promise<string> {
