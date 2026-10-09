@@ -225,7 +225,13 @@ export class CopilotSession {
       turn.signal?.addEventListener("abort", onAbort, { once: true });
 
       socket.on("error", (error) => finish(error instanceof Error ? error : new Error(String(error))));
-      socket.on("close", () => finish());
+      // Only a completion frame (type 3, or a clean type 7) ends a turn. A close
+      // before one is a dropped transport: resolving with whatever arrived would hand
+      // back a truncated — or empty — answer that looks like a dead agent.
+      socket.on("close", (code, reason) => {
+        const why = reason.toString();
+        finish(new Error(`M365 connection closed before the turn completed (code ${code}${why ? `: ${why}` : ""})`));
+      });
 
       socket.on("open", () => {
         socket.send(`${JSON.stringify({ protocol: "json", version: 1 })}${RS}`);

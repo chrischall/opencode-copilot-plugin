@@ -602,6 +602,19 @@ describe("failures the client has to be able to tell apart", () => {
     const { url } = await start();
     expect((await post(url, { messages: [{ role: "user", content: "hi" }] })).status).toBe(502);
   });
+
+  it("reports a dropped connection as a 502, not an empty 200 completion", async () => {
+    stub = await startStubCopilot({
+      respond: (_chat, connection) => {
+        setTimeout(() => connection.socket.close(1011, "gone"), 20);
+        return [delta("half an ans")];
+      },
+    });
+    const { url } = await start();
+    const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(502);
+    expect(await response.text()).toMatch(/upstream_error/);
+  });
 });
 
 describe("lifecycle", () => {
