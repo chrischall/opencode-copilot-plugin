@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.4...v0.3.5) (2026-10-17)
+
+
+### Bug Fixes
+
+* **deps:** Bump zod from 4.6.5 to 4.6.7 in the production-dependencies group ([#69](https://github.com/chrischall/opencode-copilot-plugin/issues/69)) ([0769c64](https://github.com/chrischall/opencode-copilot-plugin/commit/0769c642e7acf4b466a7f850ee6798c0dbbadec8))
+
 ## [0.3.4](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.3...v0.3.4) (2026-10-09)
 
 
