@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.4.0...v2.0.0) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* opencode 1 is no longer supported. Stay on 0.4.x for opencode 1; 2.0.0 and later fail to load there with "must default export an object with server()".
+
+### Features
+
+* drop opencode 1 support ([#82](https://github.com/chrischall/opencode-copilot-plugin/issues/82)) ([0034a1f](https://github.com/chrischall/opencode-copilot-plugin/commit/0034a1f0edfad4a03eb2d3371f8eabb29c162e7e))
+
 ## [0.4.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.3.5...v0.4.0) (2026-11-03)
 
 
