@@ -6,7 +6,7 @@
  * so the interesting decisions are testable without opencode, a network, or a tenant.
  */
 
-import { MODELS, LOCAL_TITLE_MODEL, DEFAULT_MODEL, isLocalModel } from "./models.js";
+import { MODELS, isLocalModel } from "./models.js";
 import { findShellTool, type ToolDef } from "./fenced.js";
 
 /** The provider id opencode addresses models by: `m365/<model>`. */
@@ -16,10 +16,8 @@ export const PROVIDER_ID = "m365";
  * The plugin's own id.
  *
  * opencode 2 requires one, scopes the plugin's storage by it, and names the plugin
- * by it in `plugin list` and diagnostics. opencode 1 from 1.18.29 registers an object
- * entrypoint under it too, so the two APIs must agree — `plugin-entry.test.ts` checks
- * that they do. Changing it is not cosmetic: it orphans anything stored under the old
- * one.
+ * by it in `plugin list` and diagnostics. Changing it is not cosmetic: it orphans
+ * anything stored under the old one.
  */
 export const PLUGIN_ID = "m365-copilot";
 
@@ -58,34 +56,13 @@ export const LEAN_TOOLS = ["bash", "read", "edit", "write", "apply_patch", "grep
 export const LEAN_FALLBACK_LIMIT = 5;
 
 /**
- * opencode built-ins we switch off in lean mode.
- *
- * Each one is a tool block in the injected prompt, and the count is what trips the
- * filter. `glob`/`grep` overlap and `bash` can do both; `webfetch`/`websearch` are
- * rarely load-bearing for a coding turn; `todowrite`/`question`/`skill` are harness
- * ergonomics rather than capability.
- */
-export const DISABLED_TOOLS = [
-  "glob",
-  "lsp",
-  "patch",
-  "skill",
-  "todowrite",
-  "todoread",
-  "webfetch",
-  "websearch",
-  "question",
-  "task",
-] as const;
-
-/**
  * Cut a harness's toolset down to something M365 will engage with.
  *
- * This is the enforcement point, and it has to be. opencode's own `tools` config —
- * which the plugin also sets — is resolved into the config but **not applied to the
- * request**: verified against 1.18.18, where a config disabling eight tools still
- * produced a request offering all nine. The proxy sees the final request, so it is
- * the only place the trim reliably happens.
+ * This is the enforcement point. opencode 1's own `tools` config was resolved into the
+ * config but **not applied to the request** (verified against 1.18.18: a config
+ * disabling eight tools still produced a request offering all nine). opencode 2's
+ * `tool.transform` has not been measured against a live tenant. The proxy sees the
+ * final request whatever the harness does, so the trim lives here.
  *
  * Two rules, in order:
  *   1. Keep the tools we recognise as load-bearing for a coding loop.
@@ -140,9 +117,9 @@ export interface PluginOptions {
   /**
    * Keep session-title generation off M365.
    *
-   * opencode 1 has a `small_model` setting, so we point that at the local titler.
-   * opencode 2 dropped it, so the v2 plugin flags the title request instead and the
-   * proxy answers it locally. Same guarantee, two mechanisms.
+   * opencode 2 has no `small_model` setting, so the plugin flags the title request
+   * and the proxy answers it locally. The name is kept from when it pointed opencode
+   * 1's `small_model` at the local titler, so existing configs keep working.
    */
   setSmallModel: boolean;
   /**
@@ -190,69 +167,6 @@ export function resolveOptions(raw: Partial<PluginOptions> | undefined): PluginO
   };
 }
 
-/** `{ bash: true, ..., webfetch: false, ... }` — opencode's `tools` config shape. */
-export function buildToolProfile(): Record<string, boolean> {
-  const profile: Record<string, boolean> = {};
-  for (const tool of LEAN_TOOLS) profile[tool] = true;
-  for (const tool of DISABLED_TOOLS) profile[tool] = false;
-  return profile;
-}
-
-export interface ProviderModelConfig {
-  name: string;
-  tool_call?: boolean;
-  reasoning?: boolean;
-  attachment?: boolean;
-  modalities?: { input: string[]; output: string[] };
-  limit?: { context: number; output: number };
-  cost?: { input: number; output: number; cache_read: number; cache_write: number };
-}
-
-export interface ProviderConfig {
-  npm: string;
-  name: string;
-  options: Record<string, unknown>;
-  models: Record<string, ProviderModelConfig>;
-}
-
-/** The `provider.m365` entry pointing opencode at our local OpenAI-compatible proxy. */
-export function buildProviderConfig(baseUrl: string, apiKey: string): ProviderConfig {
-  const models: Record<string, ProviderModelConfig> = {};
-  for (const model of MODELS) {
-    const local = isLocalModel(model.id);
-    models[model.id] = {
-      name: model.name,
-      // Without this opencode will not send `tools` at all, and the whole
-      // fenced-tool-call path never gets exercised.
-      tool_call: !local,
-      reasoning: model.reasoning,
-      // Images are uploaded to M365 alongside the turn (see `image.ts`). opencode
-      // reads image support from `modalities`; `attachment` enables the file picker.
-      // The local titler never reaches M365, so it stays text-only.
-      attachment: !local,
-      modalities: { input: inputModalities(model.id), output: ["text"] },
-      limit: model.limit,
-      // Billed to the M365 licence, not per token.
-      cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-    };
-  }
-
-  return {
-    npm: "@ai-sdk/openai-compatible",
-    name: "Microsoft 365 Copilot",
-    options: {
-      baseURL: baseUrl,
-      // The proxy's per-launch secret. The SDK sends it as `Authorization: Bearer`,
-      // which is what stops every other process and web page from using the proxy.
-      apiKey,
-      // A reasoning tone takes 10-30s, and a turn can retry once behind the scenes.
-      // opencode's default 5 minutes is not always enough.
-      timeout: 900_000,
-    },
-    models,
-  };
-}
-
 /**
  * opencode 2's `Provider.Info`, with its branded id types written as plain strings.
  *
@@ -293,8 +207,7 @@ export function buildProviderInfo(baseUrl: string, apiKey: string): ProviderInfo
     // `auto` waits for a credential to arrive on an integration we never register,
     // so the provider would be present and permanently unusable.
     activation: "enabled",
-    // v2 ships the openai-compatible driver, where v1 named an npm package for
-    // opencode to install. Same driver, no install.
+    // opencode 2 ships the openai-compatible driver; nothing to install.
     package: "@opencode/ai/providers/openai-compatible",
     settings: {
       baseURL: baseUrl,
@@ -351,66 +264,6 @@ function inputModalities(modelId: string): string[] {
   return isLocalModel(modelId) ? ["text"] : ["text", "image"];
 }
 
-/**
- * Mutate opencode's in-memory config during the plugin's `config` hook.
- *
- * Deliberately additive: anything the user set explicitly wins. We are a plugin
- * making someone else's config work, not the owner of it.
- */
-export function applyPluginConfig(
-  config: Record<string, any>,
-  endpoint: ProxyEndpoint,
-  options: PluginOptions,
-): void {
-  config.provider ??= {};
-  config.provider[PROVIDER_ID] = buildProviderConfig(endpoint.baseUrl, endpoint.apiKey);
-
-  if (options.setDefaultModel && !config.model) {
-    config.model = `${PROVIDER_ID}/${DEFAULT_MODEL}`;
-  }
-
-  if (options.setSmallModel && !config.small_model) {
-    config.small_model = `${PROVIDER_ID}/${LOCAL_TITLE_MODEL}`;
-  }
-
-  // Belt and braces only — this is NOT what enforces the lean toolset. opencode
-  // 1.18.18 resolves `tools` into its config and then sends every tool anyway, so
-  // the real trim happens in the proxy (`selectLeanTools`). Setting it here still
-  // declares the intent, shows up in `opencode debug config`, and will start
-  // working for free if a future version honours it.
-  //
-  // `tools` is global — there is no per-provider toolset — so only set it when an
-  // M365 model is the one actually in use, or we would be trimming tools away from
-  // providers that handle them perfectly well.
-  if (options.lean && usesOurProvider(config)) {
-    // User-set values win: someone who re-enabled `webfetch` on purpose keeps it.
-    config.tools = { ...buildToolProfile(), ...(config.tools ?? {}) };
-  }
-}
-
-function usesOurProvider(config: Record<string, any>): boolean {
-  return typeof config.model === "string" && config.model.startsWith(`${PROVIDER_ID}/`);
-}
-
-/**
- * Merge our plugin reference into an on-disk `opencode.json`, non-destructively.
- *
- * `pluginRef` is either the npm package name or an absolute path to the built
- * plugin — the CLI uses the latter for a local checkout.
- *
- * Both keys are written. They are genuinely different settings: opencode 1 reads
- * `plugin`, opencode 2 reads `plugins`, and the entry forms differ too — v1 takes a
- * `[spec, options]` tuple where v2 takes `{ package, options }`. Each version drops
- * the key it does not know rather than complaining, verified against 1.18.31, which
- * resolved a config carrying `plugins` with no diagnostic and simply left it out. So
- * one file can serve both, which is the whole point of the dual entry in `plugin.ts`.
- *
- * They also need different *references* for a local checkout. opencode 1 wants the
- * built entrypoint; opencode 2 insists on a directory and drops a file path with
- * `configured plugin path must be a directory` — measured against 2.0.11, and since
- * v2 swallows plugin load failures nothing else reports it. `pluginDir` is that
- * directory. An npm install needs neither, because the package name serves both.
- */
 /** What the filesystem says about a plugin path in the config. */
 export interface PluginPathInfo {
   exists: boolean;
@@ -431,6 +284,21 @@ const OUR_OPTION_KEYS: ReadonlySet<string> = new Set<keyof PluginOptions>([
   "apiKey",
 ]);
 
+/**
+ * Merge our plugin reference into an on-disk `opencode.json`, non-destructively.
+ *
+ * Writes opencode 2's `plugins` key. For an npm install the reference is the package
+ * name. For a local checkout it is `pluginDir`, the checkout directory: opencode 2
+ * drops a file path with `configured plugin path must be a directory` (measured
+ * against 2.0.11), and since it swallows plugin load failures nothing else says so.
+ *
+ * `pluginRef` is how older versions of setup referenced us in opencode 1's `plugin`
+ * key — the package name, or the built `dist/plugin.mjs`. It is used only to find
+ * that entry and take it out: this version no longer loads under opencode 1, which
+ * would throw on it. Options on it carry over when the `plugins` entry has none, so
+ * a `{ "lean": false }` set for opencode 1 is not lost. Other plugins' entries in
+ * `plugin` stay, and the key is removed only if we emptied it.
+ */
 export function mergeOpencodeConfig(
   existing: Record<string, any>,
   opts: {
@@ -449,17 +317,21 @@ export function mergeOpencodeConfig(
 
   const inspect = opts.inspect ?? (() => ({ exists: false }));
 
-  const v1 = withOurRef(merged.plugin, opts.pluginRef, inspect);
-  // A stale v2 entry is a bare directory, so its name says nothing about us — but it
-  // is the directory that *contains* the stale v1 entrypoint we just dropped, and
-  // that does. Anything else is somebody else's plugin and stays.
-  const v2 = withOurRef(merged.plugins, pluginDir, inspect, v1.dropped);
+  const legacy = withOurRef(merged.plugin, opts.pluginRef, inspect);
+  // A stale `plugins` entry is a bare directory, so its name says nothing about us —
+  // but it is the directory that *contains* the stale entrypoint we just dropped from
+  // `plugin`, and that does. Anything else is somebody else's plugin and stays.
+  const current = withOurRef(merged.plugins, pluginDir, inspect, legacy.dropped);
+
+  if (legacy.dropped.length > 0) {
+    if (legacy.kept.length > 0) merged.plugin = legacy.kept;
+    else delete merged.plugin;
+  }
 
   // Options ride on the entry, so replacing ours would otherwise silently undo a
-  // `{ "lean": false }` the user set by hand. The two versions spell the entry
-  // differently: v1 takes a `[spec, options]` tuple, v2 a `{ package, options }`.
-  merged.plugin = [...v1.kept, v1.options ? [opts.pluginRef, v1.options] : opts.pluginRef];
-  merged.plugins = [...v2.kept, v2.options ? { package: pluginDir, options: v2.options } : pluginDir];
+  // `{ "lean": false }` the user set by hand.
+  const options = current.options ?? legacy.options;
+  merged.plugins = [...current.kept, options ? { package: pluginDir, options } : pluginDir];
   return merged;
 }
 
@@ -497,7 +369,7 @@ function withOurRef(
   return { kept, dropped, ...(options ? { options } : {}) };
 }
 
-/** The options out of any entry form either version accepts, if it carries some. */
+/** The options out of any entry form — `[spec, options]` or `{ package, options }`. */
 function optionsOf(entry: unknown): Record<string, unknown> | undefined {
   const raw = Array.isArray(entry)
     ? entry[1]
@@ -516,7 +388,7 @@ function isWithin(dir: string, path: string): boolean {
   return path.startsWith(prefix);
 }
 
-/** The package-or-path out of any entry form either version accepts. */
+/** The package-or-path out of any entry form, including opencode 1's. */
 function specifierOf(entry: unknown): string {
   if (typeof entry === "string") return entry;
   // v1's tuple form, `[spec, options]`.

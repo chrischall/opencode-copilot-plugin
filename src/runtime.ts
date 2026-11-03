@@ -1,10 +1,7 @@
 /**
- * The part of the plugin that is the same under both opencode plugin APIs.
- *
- * v1 and v2 disagree about almost everything — how a plugin is declared, how it is
- * loaded, how it registers a provider — but they agree completely about what this
- * plugin *does*: stand up the OpenAI-compatible proxy, and hand back the URL it is
- * listening on. That is all this module is.
+ * What the plugin stands on: the OpenAI-compatible proxy, started in-process (or an
+ * external one, when `baseUrl` is set), and the URL and secret it listens with. The
+ * opencode-facing half — provider registration, the title hook — is `plugin-v2.ts`.
  *
  * Auth is deliberately not here: the plugin only refreshes silently, and tells the
  * user to run `opencode-m365 login` if it cannot. Launching a browser underneath a

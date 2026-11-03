@@ -14,7 +14,9 @@ every design decision here is what it is.
 ## The one rule that shapes the architecture
 
 **Anything that has to change what M365 receives belongs in the proxy, not in an opencode
-hook.** Two opencode levers were tried and measured non-functional in 1.18.18:
+hook.** Two opencode 1 levers were tried and measured non-functional in 1.18.18, and
+opencode 2's replacements (`tool.transform`, `session.hook("context")`) have not been
+measured against a live tenant:
 
 | Lever | What happens |
 |---|---|
@@ -41,10 +43,9 @@ do not silently move the logic back.
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |
 | `src/config.ts` | Provider config and tool policy — the pure decisions |
-| `src/plugin.ts` | The entry. One default export carrying both plugin APIs — nothing else |
-| `src/plugin-v1.ts` | opencode 1's `server()`: the `config` hook and `dispose` |
+| `src/plugin.ts` | The entry. One default export, `{ id, setup }` — nothing else |
 | `src/plugin-v2.ts` | opencode 2's `setup()`: provider/model transforms and the title hook |
-| `src/runtime.ts` | What both halves share: resolve options, start the proxy |
+| `src/runtime.ts` | Resolve options, start the proxy (or use an external one) |
 | `src/cli.ts` | `opencode-m365 login \| setup \| serve \| doctor` |
 
 ## Testing
@@ -65,24 +66,20 @@ For an end-to-end check through real opencode without touching Microsoft, run th
 against the stub and point the plugin at it with the `baseUrl` and `apiKey` options
 (`serve` prints the key, or set `M365_PROXY_KEY` for both sides).
 
-## Supporting both opencode plugin APIs
+## The plugin entry
 
-`src/plugin.ts` default-exports a single object with `id`, `setup()` and `server()`.
-opencode 1 takes `server()`, opencode 2 takes `setup()`, and the two implementations
-share nothing but `runtime.ts`. Three rules hold it together, all pinned in
-`src/plugin-entry.test.ts`:
+This is an opencode 2 plugin only; opencode 1 support ended after 0.4.x.
+`src/plugin.ts` default-exports `{ id, setup }`, and two rules hold it together, both
+pinned in `src/plugin-entry.test.ts` against the built artefact:
 
-- **That module exports `default` and nothing else.** When opencode 1's object
-  detection declines, it falls back to walking every export, and a second
-  plugin-shaped export there starts the proxy twice.
-- **The two halves travel together.** In opencode 1's detector, `id` alone arms
-  detection — so a default export carrying `id` but no `server()` does not get skipped,
-  it throws. You cannot ship the v2 half on its own.
-- **No `tui` key.** The same detector rejects `server` and `tui` on one object.
+- **That module exports `default` and nothing else.** A loader that walks exports and
+  finds a second plugin-shaped value starts the proxy twice.
+- **No `./server` export subpath in package.json.** That name is opencode's for a
+  plugin's server entry; pointing it at the HTTP proxy was issue #26.
 
-Neither plugin API package is a runtime dependency. Both are type-only imports and both
-must stay in `tsdown.config.ts`'s `external`: miss `@opencode/plugin` there and the dts
-bundler inlines `@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB.
+`@opencode/plugin` is not a runtime dependency. It is a type-only import and must stay
+in `tsdown.config.ts`'s `external`: miss it there and the dts bundler inlines
+`@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB.
 
 ## Things that will bite you
 
@@ -99,11 +96,11 @@ bundler inlines `@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB
   shouty ALL-CAPS prompt with fake role turns is not. When editing any prompt in
   `fenced.ts` or `runtime.ts`, lean softer, not harder. There are tests asserting the
   absence of jailbreak shapes — they are there on purpose.
-- **`small_model` must never reach M365.** The throttle counts conversations started;
+- **Session titles must never reach M365.** The throttle counts conversations started;
   titling every session on the main model is the fastest route into it. opencode 2 has
-  no `small_model`: there the plugin marks the title request with
-  `AUX_REQUEST_KIND_HEADER` and the proxy answers it locally. Two mechanisms, one
-  guarantee — change one and check the other.
+  no `small_model`, so the plugin marks the title request with `AUX_REQUEST_KIND_HEADER`
+  and the proxy answers it locally. The `setSmallModel` option keeps its opencode 1 name
+  so existing configs keep working.
 - **opencode 2 swallows plugin load failures.** A wrong entry shape, or a catalog record
   that has drifted out of schema, is not an error — it is a plugin that silently never
   loads. That is why `config.test.ts` checks our hand-built provider and model records

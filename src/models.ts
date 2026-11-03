@@ -39,10 +39,11 @@ const OUTPUT_TOKENS = 128_000;
  * A synthetic model served entirely by our own proxy — it never opens a WebSocket
  * to M365.
  *
- * This exists because opencode's `small_model` (session title generation) defaults
- * to the main model. That would open a *second* M365 conversation for every session,
+ * This exists because a harness titles each session with a model call, by default on
+ * the main model. That would open a *second* M365 conversation for every session,
  * which is precisely the thread-rate throttle signature: the limit tracks
- * conversations started, not messages. Pointing `small_model` here costs nothing.
+ * conversations started, not messages. Any client can select this model by id; the
+ * opencode plugin instead marks its title requests so the proxy answers them here.
  */
 export const LOCAL_TITLE_MODEL = "local-title";
 

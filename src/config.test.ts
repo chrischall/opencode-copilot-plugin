@@ -2,17 +2,14 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ToolDef } from "./fenced.js";
-import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
+import { DEFAULT_MODEL, LOCAL_TITLE_MODEL, MODELS } from "./models.js";
 import {
   DISENGAGE_TOOL_BUDGET,
   LEAN_FALLBACK_LIMIT,
   LEAN_TOOLS,
   PROVIDER_ID,
-  applyPluginConfig,
   buildModelInfos,
-  buildProviderConfig,
   buildProviderInfo,
-  buildToolProfile,
   describeToolSelection,
   mergeOpencodeConfig,
   resolveOptions,
@@ -20,54 +17,6 @@ import {
 } from "./config.js";
 
 const names = (tools: readonly ToolDef[]) => tools.map((tool) => tool.function.name);
-
-describe("provider config", () => {
-  const provider = buildProviderConfig("http://127.0.0.1:4319/v1", "per-launch-secret");
-
-  it("points an openai-compatible provider at our local proxy", () => {
-    expect(provider.npm).toBe("@ai-sdk/openai-compatible");
-    expect(provider.options?.baseURL).toBe("http://127.0.0.1:4319/v1");
-  });
-
-  it("hands opencode the proxy's per-launch secret as the api key", () => {
-    // The SDK sends it as `Authorization: Bearer`, which is what the proxy checks.
-    // A constant here would let any web page on the machine use the proxy.
-    expect(provider.options?.apiKey).toBe("per-launch-secret");
-  });
-
-  it("advertises every catalog model, including the local titler", () => {
-    expect(Object.keys(provider.models ?? {})).toContain(DEFAULT_MODEL);
-    expect(Object.keys(provider.models ?? {})).toContain(LOCAL_TITLE_MODEL);
-  });
-
-  it("declares tool_call support so opencode will send tools at all", () => {
-    expect(provider.models?.[DEFAULT_MODEL]?.tool_call).toBe(true);
-  });
-
-  it("declares image input, so opencode sends a pasted image instead of refusing it", () => {
-    // opencode derives a model's input capabilities from `modalities.input`;
-    // `attachment` gates the file picker.
-    const model = provider.models?.[DEFAULT_MODEL];
-    expect(model?.attachment).toBe(true);
-    expect(model?.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
-  });
-
-  it("keeps the local titler text-only: it never reaches M365, so an image has nowhere to go", () => {
-    const titler = provider.models?.[LOCAL_TITLE_MODEL];
-    expect(titler?.attachment).toBe(false);
-    expect(titler?.modalities).toEqual({ input: ["text"], output: ["text"] });
-  });
-
-  it("carries limits through from the catalog", () => {
-    expect(provider.models?.[DEFAULT_MODEL]?.limit?.context).toBeGreaterThan(0);
-  });
-
-  it("gives every turn a generous timeout", () => {
-    // Reasoning tones take 10-30s per turn and the default is 5 minutes; a whole
-    // agentic turn with a slow tone can exceed that.
-    expect(provider.options?.timeout).toBeGreaterThan(300_000);
-  });
-});
 
 describe("lean tool profile", () => {
   it("keeps the toolset under the measured Disengage threshold", () => {
@@ -82,21 +31,6 @@ describe("lean tool profile", () => {
     expect(LEAN_TOOLS).toEqual(expect.arrayContaining(["bash", "read", "edit", "write", "grep"]));
   });
 
-  it("disables the heavy built-ins that push opencode over the threshold", () => {
-    const profile = buildToolProfile();
-    for (const tool of ["glob", "lsp", "skill", "todowrite", "webfetch", "websearch", "question", "task"]) {
-      expect(profile[tool], `${tool} should be disabled`).toBe(false);
-    }
-  });
-
-  it("keeps apply_patch, which is how this opencode version edits files", () => {
-    expect(buildToolProfile().apply_patch).toBe(true);
-  });
-
-  it("explicitly enables the lean set rather than relying on defaults", () => {
-    const profile = buildToolProfile();
-    for (const tool of LEAN_TOOLS) expect(profile[tool]).toBe(true);
-  });
 });
 
 describe("selecting the toolset the model actually sees", () => {
@@ -212,101 +146,16 @@ describe("plugin options", () => {
   });
 });
 
-const ENDPOINT = { baseUrl: "http://127.0.0.1:4319/v1", apiKey: "per-launch-secret" };
-
-describe("applying config in the opencode config hook", () => {
-  it("points the provider at the proxy with its secret", () => {
-    const config: Record<string, any> = {};
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.provider.m365.options.baseURL).toBe(ENDPOINT.baseUrl);
-    expect(config.provider.m365.options.apiKey).toBe("per-launch-secret");
-  });
-
-  it("registers the provider", () => {
-    const config: Record<string, any> = {};
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.provider[PROVIDER_ID].options.baseURL).toBe("http://127.0.0.1:4319/v1");
-  });
-
-  it("routes the small model to the local titler so title generation never hits M365", () => {
-    const config: Record<string, any> = {};
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.small_model).toBe(`${PROVIDER_ID}/${LOCAL_TITLE_MODEL}`);
-  });
-
-  it("sets a default model only when the user has not chosen one", () => {
-    const config: Record<string, any> = { model: "anthropic/claude-sonnet-4-5" };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.model).toBe("anthropic/claude-sonnet-4-5");
-  });
-
-  it("does not clobber a small model the user already chose", () => {
-    const config: Record<string, any> = { small_model: "anthropic/claude-haiku-4-5" };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.small_model).toBe("anthropic/claude-haiku-4-5");
-  });
-
-  it("applies the lean tool profile", () => {
-    const config: Record<string, any> = {};
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.tools.webfetch).toBe(false);
-    expect(config.tools.bash).toBe(true);
-  });
-
-  it("leaves the toolset alone when lean mode is off", () => {
-    const config: Record<string, any> = {};
-    applyPluginConfig(config, ENDPOINT, resolveOptions({ lean: false }));
-    expect(config.tools).toBeUndefined();
-  });
-
-  it("does not cripple another provider's toolset", () => {
-    // `tools` is global in opencode, so trimming it while the user is driving
-    // Anthropic would take away tools that provider handles perfectly well. The
-    // trim only applies when an M365 model is the one actually in use.
-    const config: Record<string, any> = { model: "anthropic/claude-sonnet-4-5" };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.tools).toBeUndefined();
-  });
-
-  it("applies the trim when an M365 model is the default", () => {
-    const config: Record<string, any> = { model: `${PROVIDER_ID}/gpt-5.5-think-deeper` };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.tools?.webfetch).toBe(false);
-  });
-
-  it("respects a tool the user explicitly re-enabled", () => {
-    const config: Record<string, any> = { tools: { webfetch: true } };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.tools.webfetch).toBe(true);
-  });
-
-  it("preserves other providers", () => {
-    const config: Record<string, any> = { provider: { anthropic: { name: "Anthropic" } } };
-    applyPluginConfig(config, ENDPOINT, resolveOptions({}));
-    expect(config.provider.anthropic.name).toBe("Anthropic");
-    expect(config.provider[PROVIDER_ID]).toBeDefined();
-  });
-});
-
 describe("merging into an on-disk opencode.json", () => {
   it("adds the plugin reference without dropping existing plugins", () => {
-    const merged = mergeOpencodeConfig({ plugin: ["opencode-wakatime"] }, { pluginRef: "opencode-m365-copilot" });
-    expect(merged.plugin).toContain("opencode-wakatime");
-    expect(merged.plugin).toContain("opencode-m365-copilot");
+    const merged = mergeOpencodeConfig({ plugins: ["opencode-wakatime"] }, { pluginRef: "opencode-m365-copilot" });
+    expect(merged.plugins).toEqual(["opencode-wakatime", "opencode-m365-copilot"]);
   });
 
   it("is idempotent", () => {
     const once = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
     const twice = mergeOpencodeConfig(once, { pluginRef: "opencode-m365-copilot" });
-    expect(twice.plugin).toEqual(["opencode-m365-copilot"]);
-  });
-
-  it("replaces a stale reference to the same plugin at a different path", () => {
-    const merged = mergeOpencodeConfig(
-      { plugin: ["/old/path/dist/plugin.mjs"] },
-      { pluginRef: "/new/path/dist/plugin.mjs" },
-    );
-    expect(merged.plugin).toEqual(["/new/path/dist/plugin.mjs"]);
+    expect(twice.plugins).toEqual(["opencode-m365-copilot"]);
   });
 
   it("keeps the schema reference so editors still validate the file", () => {
@@ -319,107 +168,106 @@ describe("merging into an on-disk opencode.json", () => {
     expect(merged.theme).toBe("gruvbox");
   });
 
-  it("writes both the v1 and the v2 key, so one file serves either opencode", () => {
-    // They are different settings with different names, and each version silently
-    // drops the one it does not know: verified against 1.18.31, which resolved a
-    // config carrying `plugins` without a diagnostic and simply left it out.
+  it("writes only opencode 2's `plugins` key", () => {
     const merged = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
-    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
     expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
+    expect(merged).not.toHaveProperty("plugin");
   });
 
-  it("is idempotent across both keys", () => {
-    const once = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
-    const twice = mergeOpencodeConfig(once, { pluginRef: "opencode-m365-copilot" });
-    expect(twice.plugins).toEqual(["opencode-m365-copilot"]);
-  });
-
-  it("keeps other people's v2 plugins, including the object form", () => {
+  it("keeps other people's plugins, including the object form", () => {
     const merged = mergeOpencodeConfig(
       { plugins: ["opencode-wakatime", { package: "@acme/plugin", options: { strict: true } }] },
       { pluginRef: "opencode-m365-copilot" },
     );
-    expect(merged.plugins).toContainEqual("opencode-wakatime");
-    expect(merged.plugins).toContainEqual({ package: "@acme/plugin", options: { strict: true } });
-    expect(merged.plugins).toContainEqual("opencode-m365-copilot");
+    expect(merged.plugins).toEqual([
+      "opencode-wakatime",
+      { package: "@acme/plugin", options: { strict: true } },
+      "opencode-m365-copilot",
+    ]);
   });
 
-  it("replaces a stale reference in both keys when the checkout has moved", () => {
-    // The real shape of a re-run after moving a checkout: setup wrote both keys last
-    // time, so both are stale. The v2 entry is a bare directory whose name says
-    // nothing about us — what identifies it is that it contains the v1 entrypoint we
-    // are already dropping.
+  it("gives opencode 2 a directory for a local checkout, because it rejects a file path", () => {
+    // Measured against 2.0.11: a `plugins` entry pointing at a file is dropped with
+    // `configured plugin path must be a directory`, and — since v2 swallows plugin
+    // load failures — nothing else says so.
+    const merged = mergeOpencodeConfig({}, { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" });
+    expect(merged.plugins).toEqual(["/checkout"]);
+  });
+
+  it("replaces a stale reference when the checkout has moved, keeping its options", () => {
     const merged = mergeOpencodeConfig(
-      {
-        plugin: [["/old/checkout/dist/plugin.mjs", { lean: false }]],
-        plugins: [{ package: "/old/checkout", options: { lean: false } }],
-      },
+      { plugins: [{ package: "/old/checkout", options: { lean: false } }], plugin: ["/old/checkout/dist/plugin.mjs"] },
       { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
     );
-    expect(merged.plugin).toEqual([["/new/checkout/dist/plugin.mjs", { lean: false }]]);
-    expect(merged.plugins).toEqual([
-      { package: "/new/checkout", options: { lean: false } },
-    ]);
+    expect(merged.plugins).toEqual([{ package: "/new/checkout", options: { lean: false } }]);
   });
 
   it("does not mistake an unrelated directory for a stale copy of us", () => {
     const merged = mergeOpencodeConfig(
-      { plugin: [], plugins: [{ package: "/somewhere/else" }] },
+      { plugins: [{ package: "/somewhere/else" }] },
       { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" },
     );
     expect(merged.plugins).toEqual([{ package: "/somewhere/else" }, "/checkout"]);
   });
 
-  it("gives opencode 2 a directory, because it rejects a file path outright", () => {
-    // Measured against 2.0.11: a `plugins` entry pointing at a file is dropped with
-    // `configured plugin path must be a directory`, and — since v2 swallows plugin
-    // load failures — nothing else says so. opencode 1 wants the built entrypoint,
-    // so the two keys genuinely need different references for a local checkout.
-    const merged = mergeOpencodeConfig(
-      {},
-      { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" },
-    );
-    expect(merged.plugin).toEqual(["/checkout/dist/plugin.mjs"]);
-    expect(merged.plugins).toEqual(["/checkout"]);
-  });
-
   it("keeps the options the user set when it replaces our own entry", () => {
-    // A `setup` re-run must not silently undo `{ "lean": false }`. Both entry forms
-    // carry options, and both are preserved.
+    // A `setup` re-run must not silently undo `{ "lean": false }`.
     const merged = mergeOpencodeConfig(
-      {
-        plugin: [["opencode-m365-copilot", { lean: false }]],
-        plugins: [{ package: "opencode-m365-copilot", options: { lean: false } }],
-      },
+      { plugins: [{ package: "opencode-m365-copilot", options: { lean: false } }] },
       { pluginRef: "opencode-m365-copilot" },
     );
-    expect(merged.plugin).toEqual([["opencode-m365-copilot", { lean: false }]]);
-    expect(merged.plugins).toEqual([
-      { package: "opencode-m365-copilot", options: { lean: false } },
-    ]);
-  });
-
-  it("carries options across a moved checkout, onto the new reference", () => {
-    const merged = mergeOpencodeConfig(
-      {
-        plugin: [["/old/checkout/dist/plugin.mjs", { leanSystemPrompt: true }]],
-        plugins: [{ package: "/old/checkout", options: { leanSystemPrompt: true } }],
-      },
-      { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
-    );
-    expect(merged.plugin).toEqual([["/new/checkout/dist/plugin.mjs", { leanSystemPrompt: true }]]);
-    expect(merged.plugins).toEqual([
-      { package: "/new/checkout", options: { leanSystemPrompt: true } },
-    ]);
+    expect(merged.plugins).toEqual([{ package: "opencode-m365-copilot", options: { lean: false } }]);
   });
 
   it("stays a bare specifier when there are no options to keep", () => {
-    const merged = mergeOpencodeConfig(
-      { plugin: ["opencode-m365-copilot"], plugins: ["opencode-m365-copilot"] },
-      { pluginRef: "opencode-m365-copilot" },
-    );
-    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
+    const merged = mergeOpencodeConfig({ plugins: ["opencode-m365-copilot"] }, { pluginRef: "opencode-m365-copilot" });
     expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
+  });
+
+  describe("cleaning up after an opencode 1 install", () => {
+    // Older versions also wrote opencode 1's `plugin` key. This version no longer
+    // loads there — opencode 1 would throw on it — so setup takes our entry out.
+
+    it("removes our entry from the opencode 1 key, and the key once it is empty", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: ["opencode-m365-copilot"], plugins: ["opencode-m365-copilot"] },
+        { pluginRef: "opencode-m365-copilot" },
+      );
+      expect(merged).not.toHaveProperty("plugin");
+      expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
+    });
+
+    it("leaves other people's opencode 1 entries where they are", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: ["opencode-wakatime", ["/checkout/dist/plugin.mjs", { lean: false }]] },
+        { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout" },
+      );
+      expect(merged.plugin).toEqual(["opencode-wakatime"]);
+    });
+
+    it("carries options from an opencode 1 entry over when there is no opencode 2 one", () => {
+      const merged = mergeOpencodeConfig(
+        { plugin: [["/old/checkout/dist/plugin.mjs", { leanSystemPrompt: true }]] },
+        { pluginRef: "/new/checkout/dist/plugin.mjs", pluginDir: "/new/checkout" },
+      );
+      expect(merged).not.toHaveProperty("plugin");
+      expect(merged.plugins).toEqual([{ package: "/new/checkout", options: { leanSystemPrompt: true } }]);
+    });
+
+    it("prefers the opencode 2 entry's options when both carry some", () => {
+      const merged = mergeOpencodeConfig(
+        {
+          plugin: [["opencode-m365-copilot", { lean: false }]],
+          plugins: [{ package: "opencode-m365-copilot", options: { leanSystemPrompt: true } }],
+        },
+        { pluginRef: "opencode-m365-copilot" },
+      );
+      expect(merged.plugins).toEqual([{ package: "opencode-m365-copilot", options: { leanSystemPrompt: true } }]);
+    });
+
+    it("does not add an opencode 1 key that was not there", () => {
+      expect(mergeOpencodeConfig({ plugins: [] }, { pluginRef: "opencode-m365-copilot" })).not.toHaveProperty("plugin");
+    });
   });
 
   describe("telling our stale entries from someone else's local plugin", () => {
@@ -435,14 +283,11 @@ describe("merging into an on-disk opencode.json", () => {
 
     it("keeps another local plugin that shares the dist/plugin.mjs layout, with its options", () => {
       const merged = mergeOpencodeConfig(
-        {
-          plugin: [["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }]],
-          plugins: [{ package: "/Users/x/other-plugin", options: { strict: true } }],
-        },
+        { plugin: [["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }]] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/Users/x/other-plugin": "other-plugin" }) },
       );
-      expect(merged.plugin).toEqual([["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }], "/checkout/dist/plugin.mjs"]);
-      expect(merged.plugins).toEqual([{ package: "/Users/x/other-plugin", options: { strict: true } }, "/checkout"]);
+      expect(merged.plugin).toEqual([["/Users/x/other-plugin/dist/plugin.mjs", { strict: true }]]);
+      expect(merged.plugins).toEqual(["/checkout"]);
     });
 
     it("keeps an existing local plugin whose package it cannot identify", () => {
@@ -450,7 +295,7 @@ describe("merging into an on-disk opencode.json", () => {
         { plugin: ["/Users/x/mystery/dist/plugin.mjs"] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/Users/x/mystery": null }) },
       );
-      expect(merged.plugin).toEqual(["/Users/x/mystery/dist/plugin.mjs", "/checkout/dist/plugin.mjs"]);
+      expect(merged.plugin).toEqual(["/Users/x/mystery/dist/plugin.mjs"]);
     });
 
     it("replaces an existing checkout whose package.json says it is us", () => {
@@ -458,7 +303,7 @@ describe("merging into an on-disk opencode.json", () => {
         { plugin: [["/old/place/dist/plugin.mjs", { lean: false }]], plugins: [{ package: "/old/place", options: { lean: false } }] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({ "/old/place": "opencode-m365-copilot" }) },
       );
-      expect(merged.plugin).toEqual([["/checkout/dist/plugin.mjs", { lean: false }]]);
+      expect(merged).not.toHaveProperty("plugin");
       expect(merged.plugins).toEqual([{ package: "/checkout", options: { lean: false } }]);
     });
 
@@ -467,19 +312,18 @@ describe("merging into an on-disk opencode.json", () => {
         { plugin: [["/gone/elsewhere/dist/plugin.mjs", { strict: true }]] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
       );
-      expect(merged.plugin).toEqual([["/gone/elsewhere/dist/plugin.mjs", { strict: true }], "/checkout/dist/plugin.mjs"]);
+      expect(merged.plugin).toEqual([["/gone/elsewhere/dist/plugin.mjs", { strict: true }]]);
     });
 
     it("takes a vanished option-less entry as our stale copy, in both keys", () => {
-      // Deliberate, and the one case a foreign plugin can lose its entry: setup writes
+      // Deliberate, and the one case a foreign plugin can lose its entry: setup wrote
       // a bare entry unless the user added options, so a moved checkout usually leaves
-      // exactly this. Keeping it would leave opencode loading a file that is gone —
-      // and a vanished foreign entry was already failing to load.
+      // exactly this — and a vanished foreign entry was already failing to load.
       const merged = mergeOpencodeConfig(
         { plugin: ["/gone/elsewhere/dist/plugin.mjs"], plugins: ["/gone/elsewhere"] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
       );
-      expect(merged.plugin).toEqual(["/checkout/dist/plugin.mjs"]);
+      expect(merged).not.toHaveProperty("plugin");
       expect(merged.plugins).toEqual(["/checkout"]);
     });
 
@@ -488,17 +332,8 @@ describe("merging into an on-disk opencode.json", () => {
         { plugin: [["/gone/elsewhere/dist/plugin.mjs", { lean: true, strict: true }]] },
         { pluginRef: "/checkout/dist/plugin.mjs", pluginDir: "/checkout", ...fs({}) },
       );
-      expect(merged.plugin).toEqual([
-        ["/gone/elsewhere/dist/plugin.mjs", { lean: true, strict: true }],
-        "/checkout/dist/plugin.mjs",
-      ]);
+      expect(merged.plugin).toEqual([["/gone/elsewhere/dist/plugin.mjs", { lean: true, strict: true }]]);
     });
-  });
-
-  it("uses the package name for both keys when installed from npm", () => {
-    const merged = mergeOpencodeConfig({}, { pluginRef: "opencode-m365-copilot" });
-    expect(merged.plugin).toEqual(["opencode-m365-copilot"]);
-    expect(merged.plugins).toEqual(["opencode-m365-copilot"]);
   });
 });
 
@@ -532,11 +367,11 @@ describe("the v2 catalog entry", () => {
     expect(Number(info.settings?.timeout)).toBeGreaterThan(300_000);
   });
 
-  it("advertises the same catalog as v1, including the local titler", () => {
+  it("advertises every catalog model, including the local titler", () => {
     const ids = models.map((model) => model.id);
     expect(ids).toContain(DEFAULT_MODEL);
     expect(ids).toContain(LOCAL_TITLE_MODEL);
-    expect(ids).toEqual(Object.keys(buildProviderConfig(baseUrl, "k").models));
+    expect(ids).toEqual(MODELS.map((model) => model.id));
   });
 
   it("declares tool support everywhere except the local titler", () => {
@@ -577,9 +412,9 @@ describe("the v2 catalog entry, against opencode 2's own schema", () => {
 
   /**
    * opencode 2's schemas are built with the `effect` that `@opencode/schema` itself
-   * resolves. Our root `effect` is a different, older copy (pinned by
-   * `@opencode-ai/plugin`), and decoding a schema with a mismatched copy fails on
-   * every field — so reach the matching one deliberately rather than by luck.
+   * resolves. The tree can hold several copies of `effect`, and decoding a schema
+   * with a mismatched one fails on every field — so reach the matching one
+   * deliberately rather than by luck.
    */
   const loadSchema = async () => {
     const schemaEntry = fileURLToPath(import.meta.resolve("@opencode/schema/model"));

@@ -1,5 +1,5 @@
 /**
- * The opencode 2 plugin: the `setup()` half of the entry in `plugin.ts`.
+ * The opencode 2 plugin: the `setup()` that `plugin.ts` exports.
  *
  * v2 has no single mutable config object. Every change is registered against the
  * domain that owns it, as a **transform** — a synchronous, replayable edit that
@@ -9,11 +9,11 @@
  * so "set it only if the user has not" has to be re-checked inside the callback
  * rather than decided once at setup.
  *
- * What does *not* change from v1: the toolset trim and the system-prompt condense
- * stay in the proxy. v2 does offer working hooks for both (`tool.transform`,
- * `session.hook("context")`) where v1's were dead, but neither has been measured
- * against a live tenant, and the proxy is the only layer that holds for every
- * harness. See AGENTS.md before moving either.
+ * The toolset trim and the system-prompt condense stay in the proxy. opencode 2 offers
+ * hooks for both (`tool.transform`, `session.hook("context")`), where opencode 1's
+ * equivalents were measured dead, but neither has been measured against a live
+ * tenant, and the proxy is the only layer that holds for every harness. See AGENTS.md
+ * before moving either.
  */
 
 import type { Plugin } from "@opencode/plugin";
@@ -47,9 +47,9 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
     });
   }
 
-  // v2 has no `small_model`, so v1's trick of pointing titling at the local titler
-  // by id has no equivalent — and the title request's model is read-only here. Its
-  // headers are not, so we mark the kind and let the proxy answer locally. A second
+  // opencode 2 has no `small_model` to point at the local titler, and the title
+  // request's model is read-only here. Its headers are not, so we mark the kind and
+  // let the proxy answer locally. A second
   // M365 conversation per session is exactly the throttle signature; see models.ts.
   //
   // The same hook names the session on primary requests, so the proxy keys its M365

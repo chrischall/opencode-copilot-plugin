@@ -38,7 +38,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.18.18",
     "@opencode/plugin": "^2.2.5",
     "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
@@ -64,14 +63,10 @@
     "url": "git+https://github.com/chrischall/opencode-copilot-plugin.git"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.18.0",
     "@opencode/plugin": ">=2.0.0",
     "playwright": ">=1.50.0"
   },
   "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
-      "optional": true
-    },
     "@opencode/plugin": {
       "optional": true
     },
