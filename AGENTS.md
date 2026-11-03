@@ -77,6 +77,11 @@ pinned in `src/plugin-entry.test.ts` against the built artefact:
 - **No `./server` export subpath in package.json.** That name is opencode's for a
   plugin's server entry; pointing it at the HTTP proxy was issue #26.
 
+`package.json` `overrides` force `glob` ^14 and `minimatch` ^11 (GHSA-g3hv-75wg-m249,
+which has no 9.x/10.x fix). Both only reach the dev tree, through `@opencode/plugin`'s
+own dependencies, and they move **together**: glob 13 and earlier call minimatch APIs
+that 11 removed. Drop both once `@opencode/plugin` resolves minimatch ≥ 11.0.1 on its own.
+
 `@opencode/plugin` is not a runtime dependency. It is a type-only import and must stay
 in `tsdown.config.ts`'s `external`: miss it there and the dts bundler inlines
 `@opencode/schema` and effect, turning `plugin.d.mts` into 16 MB.
