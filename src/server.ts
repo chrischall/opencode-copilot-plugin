@@ -31,6 +31,7 @@ import {
   type ChatRequest,
   type ConversationState,
 } from "./translate.js";
+import { collectImages } from "./image.js";
 import { parseToolCalls } from "./fenced.js";
 import { createLogger } from "./log.js";
 
@@ -367,6 +368,8 @@ async function runTurn(
     ...(context.deps.endpoint ? { endpoint: context.deps.endpoint } : {}),
   });
 
+  // Only the messages this turn carries: M365 already has any earlier image.
+  const images = collectImages(body.messages, conversation.sentMessageCount);
   const prompt = buildTurnPrompt(body.messages, tools, conversation.sentMessageCount, {
     ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
   });
@@ -393,6 +396,7 @@ async function runTurn(
       ...(model.tone ? { tone: model.tone } : {}),
       agentId: agent,
       signal: abort.signal,
+      ...(images.length > 0 ? { images } : {}),
       ...(canStreamText
         ? { onDelta: (chunk: string) => response.write(streamChunk(streamId, model.id, { content: chunk })) }
         : {}),

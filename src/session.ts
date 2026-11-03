@@ -23,6 +23,7 @@
 import { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import { createLogger, trunc } from "./log.js";
+import { uploadImage, type ImageAnnotation } from "./image.js";
 
 const log = createLogger("session");
 
@@ -127,6 +128,11 @@ export interface TurnOptions {
   agentId?: string | null;
   signal?: AbortSignal;
   onDelta?: (chunk: string) => void;
+  /**
+   * Images to show the model this turn, as data URLs. Each is uploaded into this
+   * conversation before the turn and referenced from the chat message.
+   */
+  images?: readonly string[];
 }
 
 /**
@@ -162,14 +168,55 @@ export class CopilotSession {
     const { oid, tid } = decodeJwt(token);
     const url = this.buildUrl(token, oid, tid);
 
+    const { annotations, note } = await this.uploadImages(token, turn);
+    const message: OutgoingMessage = { text: note ? `${text}\n\n${note}` : text, annotations };
+
     const socket = new WebSocket(url, { headers: BROWSER_HEADERS });
     try {
-      const result = await this.pump(socket, text, turn);
+      const result = await this.pump(socket, message, turn);
       this.turnIndex += 1;
       return result;
     } finally {
       closeSocket(socket);
     }
+  }
+
+  /**
+   * Upload the turn's images. A failure costs that image, not the turn: the model is
+   * told what did not arrive, so it says so instead of describing a picture it never
+   * received.
+   */
+  private async uploadImages(
+    token: string,
+    turn: TurnOptions,
+  ): Promise<{ annotations: ImageAnnotation[]; note?: string }> {
+    const images = turn.images ?? [];
+    const annotations: ImageAnnotation[] = [];
+    const origin = (this.options.endpoint ?? DEFAULT_ENDPOINT).replace(/^ws/, "http");
+
+    for (const image of images) {
+      try {
+        annotations.push(
+          await uploadImage(image, {
+            token,
+            conversationId: this.conversationId,
+            origin,
+            ...(turn.signal ? { signal: turn.signal } : {}),
+          }),
+        );
+      } catch (error) {
+        if (turn.signal?.aborted) throw abortError();
+        log.warn("image not attached", error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    const missing = images.length - annotations.length;
+    if (missing === 0) return { annotations };
+    const note =
+      images.length === 1
+        ? "(The user attached an image, but it could not be uploaded, so it is not visible to you. If it matters, let them know.)"
+        : `(${missing} of the ${images.length} attached images could not be uploaded, so they are not visible to you. If they matter, let the user know.)`;
+    return { annotations, note };
   }
 
   private buildUrl(token: string, oid: string, tid: string): string {
@@ -190,7 +237,7 @@ export class CopilotSession {
   }
 
   /** Drive one turn to completion. */
-  private pump(socket: WebSocket, text: string, turn: TurnOptions): Promise<TurnResult> {
+  private pump(socket: WebSocket, outgoing: OutgoingMessage, turn: TurnOptions): Promise<TurnResult> {
     return new Promise<TurnResult>((resolve, reject) => {
       let deltaText = "";
       let snapshotText = "";
@@ -242,7 +289,7 @@ export class CopilotSession {
           // The handshake ack is `{}`; the chat frame goes out immediately after.
           if (!handshakeDone) {
             handshakeDone = true;
-            this.sendChat(socket, text, turn);
+            this.sendChat(socket, outgoing, turn);
             // An ack carries nothing else, but a server that batches may.
             if (Object.keys(frame).length === 0) continue;
           }
@@ -299,8 +346,9 @@ export class CopilotSession {
   }
 
   /** The chat invocation and its mandatory Metrics companion, in one send. */
-  private sendChat(socket: WebSocket, text: string, turn: TurnOptions): void {
+  private sendChat(socket: WebSocket, outgoing: OutgoingMessage, turn: TurnOptions): void {
     const now = new Date().toISOString();
+    const { text } = outgoing;
 
     const message: Record<string, unknown> = {
       text,
@@ -311,6 +359,7 @@ export class CopilotSession {
       timestamp: now,
       messageId: randomUUID(),
     };
+    if (outgoing.annotations.length > 0) message.messageAnnotations = outgoing.annotations;
 
     const argument: Record<string, unknown> = {
       message,
@@ -361,7 +410,10 @@ export class CopilotSession {
       type: 1,
     };
 
-    log.info("sending turn", trunc({ tone: argument.tone, agent: Boolean(turn.agentId), text }));
+    log.info(
+      "sending turn",
+      trunc({ tone: argument.tone, agent: Boolean(turn.agentId), images: outgoing.annotations.length, text }),
+    );
     // Both frames, one send. This is the part that silently breaks everything.
     socket.send(`${JSON.stringify(chat)}${RS}${JSON.stringify(metrics)}${RS}`);
   }
@@ -411,6 +463,12 @@ export class CopilotSession {
       if (message?.author === "bot" && !message.messageType) absorbMetadata(message, result);
     }
   }
+}
+
+/** What the chat frame carries from the caller: the prompt and its uploaded images. */
+interface OutgoingMessage {
+  text: string;
+  annotations: ImageAnnotation[];
 }
 
 /** Pull the diagnostic fields off a final bot message. */

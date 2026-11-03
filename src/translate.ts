@@ -154,6 +154,10 @@ export function contentOf(message: ChatMessage): string {
   return "";
 }
 
+function hasImagePart(message: ChatMessage): boolean {
+  return Array.isArray(message.content) && message.content.some((part) => part.type === "image_url");
+}
+
 // --- prompt construction --------------------------------------------------------
 
 /**
@@ -334,7 +338,9 @@ export function buildTurnPrompt(
       continue;
     }
 
-    const text = contentOf(message);
+    // A pasted image with nothing typed: the image itself travels as an upload, but
+    // the turn still needs words.
+    const text = contentOf(message) || (hasImagePart(message) ? "(See the attached image.)" : "");
     if (text) parts.push(text);
   }
 

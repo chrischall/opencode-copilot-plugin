@@ -37,6 +37,7 @@ do not silently move the logic back.
 | `src/login.ts` | The browser sign-in. CLI-only, Playwright is an optional dependency |
 | `src/agent.ts` | Copilot Studio declarative agent: discovery, create, publish, hash-versioning |
 | `src/fenced.ts` | The fenced tool-call contract, both directions, plus the hardening layers |
+| `src/image.ts` | Image input: collect `image_url` parts, upload to M365, build the annotation |
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |
 | `src/config.ts` | Provider config and tool policy — the pure decisions |
@@ -48,7 +49,8 @@ do not silently move the logic back.
 
 ## Testing
 
-TDD, `pnpm test`. No network, no credentials, no live M365 — ever, in the test suite.
+TDD, `npm test` (typecheck, then vitest). The repo is npm — `package-lock.json`, `npm ci`
+in CI — and `pnpm test` silently installs a pnpm tree on top of it. No network, no credentials, no live M365 — ever, in the test suite.
 
 `test/stub-copilot.ts` speaks enough of the real protocol to drive a full turn, and
 records every frame the client sends so tests can assert on things the real server

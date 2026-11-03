@@ -44,6 +44,20 @@ describe("provider config", () => {
     expect(provider.models?.[DEFAULT_MODEL]?.tool_call).toBe(true);
   });
 
+  it("declares image input, so opencode sends a pasted image instead of refusing it", () => {
+    // opencode derives a model's input capabilities from `modalities.input`;
+    // `attachment` gates the file picker.
+    const model = provider.models?.[DEFAULT_MODEL];
+    expect(model?.attachment).toBe(true);
+    expect(model?.modalities).toEqual({ input: ["text", "image"], output: ["text"] });
+  });
+
+  it("keeps the local titler text-only: it never reaches M365, so an image has nowhere to go", () => {
+    const titler = provider.models?.[LOCAL_TITLE_MODEL];
+    expect(titler?.attachment).toBe(false);
+    expect(titler?.modalities).toEqual({ input: ["text"], output: ["text"] });
+  });
+
   it("carries limits through from the catalog", () => {
     expect(provider.models?.[DEFAULT_MODEL]?.limit?.context).toBeGreaterThan(0);
   });
@@ -531,8 +545,10 @@ describe("the v2 catalog entry", () => {
     expect(byId.get(LOCAL_TITLE_MODEL)?.capabilities.tools).toBe(false);
   });
 
-  it("offers no image input, because the proxy cannot carry attachments", () => {
-    for (const model of models) expect(model.capabilities.input).toEqual(["text"]);
+  it("offers image input on every model that reaches M365", () => {
+    for (const model of models) {
+      expect(model.capabilities.input).toEqual(model.id === LOCAL_TITLE_MODEL ? ["text"] : ["text", "image"]);
+    }
   });
 
   it("prices every model at zero, since M365 bills the licence not the token", () => {

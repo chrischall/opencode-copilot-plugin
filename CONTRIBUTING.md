@@ -7,7 +7,7 @@ it is, and lists the failure modes that will otherwise bite you.
 
 ```sh
 npm ci
-npm test        # 238 tests; no network, no credentials, no live M365
+npm test        # typecheck + suite; no network, no credentials, no live M365
 npm run typecheck
 npm run build
 ```
