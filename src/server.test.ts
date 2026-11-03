@@ -461,6 +461,53 @@ describe("follow-up turns", () => {
   });
 });
 
+describe("pasted images", () => {
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+  const JPEG = "data:image/jpeg;base64,/9j/4AAQ";
+  const withImage = (text: string, url: string) => ({
+    role: "user",
+    content: [
+      { type: "text", text },
+      { type: "image_url", image_url: { url } },
+    ],
+  });
+  const chatMessages = (server: StubServer) =>
+    server.connections.flatMap((c) => c.frames.filter((f) => f.type === 4)).map((f) => f.arguments[0].message);
+
+  it("uploads an image from the request and attaches it to the turn", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("a cat"), completion()] });
+    const { url } = await start();
+    const response = await post(url, { messages: [withImage("what is this?", PNG)] });
+
+    expect(response.status).toBe(200);
+    expect(stub.uploads.map((upload) => upload.form.get("FileBase64"))).toEqual([PNG]);
+    const [message] = chatMessages(stub);
+    expect(message.text).toContain("what is this?");
+    expect(message.messageAnnotations.map((a: any) => a.id)).toEqual(["doc-1"]);
+  });
+
+  it("does not re-upload an earlier image when the client resends the history", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    const first = [withImage("first", PNG)];
+    await post(url, { messages: first });
+    await post(url, { messages: [...first, { role: "assistant", content: "ok" }, withImage("second", JPEG)] });
+
+    expect(stub.uploads.map((upload) => upload.form.get("FileBase64"))).toEqual([PNG, JPEG]);
+    expect(chatMessages(stub).map((m: any) => m.messageAnnotations?.length)).toEqual([1, 1]);
+  });
+
+  it("gives an image-only message some text, so the turn is not empty", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await post(url, { messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: PNG } }] }] });
+
+    const [message] = chatMessages(stub);
+    expect(message.text.trim()).not.toBe("");
+    expect(message.messageAnnotations).toHaveLength(1);
+  });
+});
+
 describe("the local titler", () => {
   it("answers without opening any M365 conversation at all", async () => {
     stub = await startStubCopilot();

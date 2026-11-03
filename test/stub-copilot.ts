@@ -6,8 +6,12 @@
  * stream-item / completion frames a turn is made of. Every frame the client sends is
  * captured so tests can assert on things the real server would silently punish us
  * for getting wrong — most importantly the mandatory `Metrics` frame.
+ *
+ * The same port also answers `POST /m365Copilot/UploadFile`, the HTTP endpoint an
+ * image is uploaded to before the turn that points at it.
  */
 
+import { createServer, type IncomingHttpHeaders } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AddressInfo } from "node:net";
 
@@ -38,23 +42,54 @@ export interface StubOptions {
   pingFirst?: boolean;
   /** Delay in ms before the response frames go out. */
   delayMs?: number;
+  /**
+   * Answer an image upload. Defaults to `200 {"docId":"doc-<n>"}`, numbered from 1
+   * in arrival order.
+   */
+  upload?: (upload: StubUpload) => { status: number; body: unknown };
+}
+
+export interface StubUpload {
+  path: string;
+  headers: IncomingHttpHeaders;
+  /** The form-encoded body, decoded. */
+  form: URLSearchParams;
 }
 
 export interface StubServer {
   /** `ws://127.0.0.1:<port>` — pass as the session's endpoint override. */
   origin: string;
   connections: StubConnection[];
+  /** Every image upload received, in arrival order. */
+  uploads: StubUpload[];
   /** The most recent connection, which is what a single-turn test wants. */
   last(): StubConnection;
   close(): Promise<void>;
 }
 
 export async function startStubCopilot(options: StubOptions = {}): Promise<StubServer> {
-  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   const connections: StubConnection[] = [];
+  const uploads: StubUpload[] = [];
 
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const { port } = wss.address() as AddressInfo;
+  const http = createServer((request, response) => {
+    let raw = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => (raw += chunk));
+    request.on("end", () => {
+      const upload: StubUpload = { path: request.url ?? "", headers: request.headers, form: new URLSearchParams(raw) };
+      uploads.push(upload);
+      const reply =
+        request.method === "POST" && upload.path.startsWith("/m365Copilot/UploadFile")
+          ? (options.upload?.(upload) ?? { status: 200, body: { docId: `doc-${uploads.length}` } })
+          : { status: 404, body: { error: "not found" } };
+      response.writeHead(reply.status, { "content-type": "application/json" });
+      response.end(typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body));
+    });
+  });
+  const wss = new WebSocketServer({ server: http });
+
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+  const { port } = http.address() as AddressInfo;
 
   wss.on("connection", (socket, request) => {
     const connection: StubConnection = {
@@ -111,11 +146,15 @@ export async function startStubCopilot(options: StubOptions = {}): Promise<StubS
   return {
     origin: `ws://127.0.0.1:${port}`,
     connections,
+    uploads,
     last: () => connections[connections.length - 1]!,
     close: () =>
       new Promise<void>((resolve) => {
         for (const connection of connections) connection.socket.terminate();
-        wss.close(() => resolve());
+        wss.close(() => {
+          http.closeAllConnections();
+          http.close(() => resolve());
+        });
       }),
   };
 }

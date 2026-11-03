@@ -162,6 +162,59 @@ describe("agent attachment", () => {
   });
 });
 
+describe("images", () => {
+  const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+  it("uploads each image into this conversation, then points the chat message at it", async () => {
+    stub = await startStubCopilot();
+    const session = sessionFor(stub);
+    await session.run("what is in this?", { images: [PNG, "data:image/jpeg;base64,/9j/"] });
+
+    expect(stub.uploads.map((upload) => upload.form.get("conversationId"))).toEqual([
+      session.conversationId,
+      session.conversationId,
+    ]);
+    expect(stub.uploads[0]?.headers.authorization).toBe(`Bearer ${fakeToken()}`);
+
+    const message = chatFrame(stub).arguments[0].message;
+    expect(message.messageAnnotations.map((a: any) => [a.id, a.messageAnnotationMetadata.fileType])).toEqual([
+      ["doc-1", "png"],
+      ["doc-2", "jpg"],
+    ]);
+    expect(message.text).toBe("what is in this?");
+  });
+
+  it("sends no annotations on a turn without images", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("hi");
+    expect(chatFrame(stub).arguments[0].message.messageAnnotations).toBeUndefined();
+    expect(stub.uploads).toHaveLength(0);
+  });
+
+  it("works with the agent attached, which the upload does not depend on", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("look", { images: [PNG], agentId: "T_1.a.gpt.default" });
+    expect(chatFrame(stub).arguments[0].message.messageAnnotations).toHaveLength(1);
+  });
+
+  it("tells the model an image did not arrive, so it does not describe one it never saw", async () => {
+    stub = await startStubCopilot({
+      upload: (upload) =>
+        upload.form.get("FileBase64") === PNG ? { status: 500, body: "boom" } : { status: 200, body: { docId: "ok-1" } },
+    });
+    await sessionFor(stub).run("compare these", {
+      images: [PNG, "https://example.com/remote.png", "data:image/gif;base64,R0lG"],
+    });
+
+    const message = chatFrame(stub).arguments[0].message;
+    expect(message.messageAnnotations.map((a: any) => a.id)).toEqual(["ok-1"]);
+    expect(message.text).toMatch(/^compare these/);
+    expect(message.text).toMatch(/2 of the 3 attached images could not be/);
+    // Only data URLs are uploaded; a remote URL is never fetched.
+    expect(stub.uploads).toHaveLength(2);
+  });
+});
+
 describe("receiving a response", () => {
   it("accumulates streamed deltas", async () => {
     stub = await startStubCopilot({

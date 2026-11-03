@@ -245,6 +245,22 @@ opencode-m365 serve [--port 4141]     # run the proxy standalone, for any OpenAI
 opencode-m365 doctor                  # check auth, agent, proxy and opencode wiring
 ```
 
+## Images
+
+Paste an image into opencode (or attach one with `opencode run -f shot.png`) and the
+model sees it. opencode sends it to the proxy as an `image_url` data URL; the proxy
+uploads it to M365 the way the Copilot web client does — `POST /m365Copilot/UploadFile`
+into the same conversation — and the turn points at the upload with an `ImageFile`
+annotation. Only images new to a turn are uploaded: M365 already holds the earlier ones.
+
+- If an upload fails, the turn still runs and the model is told the image did not
+  arrive, so it says so instead of describing a picture it never saw.
+- Data URLs only. A remote `https://` image URL is not fetched.
+- The local titler model stays text-only; it never reaches M365.
+- The M365 side is implemented from cramt/m365-copilot-proxy's measurement (one model,
+  agent attached and not); like the rest of this README's M365 claims, it has not been
+  run against a live tenant from here.
+
 ## Limits
 
 - **600 user messages per conversation.** The proxy reuses one conversation per task,
@@ -265,10 +281,9 @@ opencode-m365 doctor                  # check auth, agent, proxy and opencode wi
 ## Development
 
 ```sh
-pnpm install
-pnpm test          # 237 tests, no network and no credentials required
-pnpm typecheck
-pnpm build
+npm ci
+npm test           # typechecks, then runs the suite; no network and no credentials required
+npm run build
 ```
 
 Tests run against a stub SignalR server (`test/stub-copilot.ts`) that speaks the real

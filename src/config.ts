@@ -203,6 +203,7 @@ export interface ProviderModelConfig {
   tool_call?: boolean;
   reasoning?: boolean;
   attachment?: boolean;
+  modalities?: { input: string[]; output: string[] };
   limit?: { context: number; output: number };
   cost?: { input: number; output: number; cache_read: number; cache_write: number };
 }
@@ -218,13 +219,18 @@ export interface ProviderConfig {
 export function buildProviderConfig(baseUrl: string, apiKey: string): ProviderConfig {
   const models: Record<string, ProviderModelConfig> = {};
   for (const model of MODELS) {
+    const local = isLocalModel(model.id);
     models[model.id] = {
       name: model.name,
       // Without this opencode will not send `tools` at all, and the whole
       // fenced-tool-call path never gets exercised.
-      tool_call: !isLocalModel(model.id),
+      tool_call: !local,
       reasoning: model.reasoning,
-      attachment: false,
+      // Images are uploaded to M365 alongside the turn (see `image.ts`). opencode
+      // reads image support from `modalities`; `attachment` enables the file picker.
+      // The local titler never reaches M365, so it stays text-only.
+      attachment: !local,
+      modalities: { input: inputModalities(model.id), output: ["text"] },
       limit: model.limit,
       // Billed to the M365 licence, not per token.
       cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
@@ -326,8 +332,8 @@ export function buildModelInfos(): ModelInfoV2[] {
       // Without this opencode will not send `tools` at all, and the whole
       // fenced-tool-call path never gets exercised.
       tools: !isLocalModel(model.id),
-      // The proxy carries text only; an attachment has nowhere to go.
-      input: ["text"],
+      // Images are uploaded to M365 alongside the turn; see `image.ts`.
+      input: inputModalities(model.id),
       output: ["text"],
     },
     variants: [],
@@ -338,6 +344,11 @@ export function buildModelInfos(): ModelInfoV2[] {
     enabled: true,
     limit: model.limit,
   }));
+}
+
+/** Image input on every model that reaches M365; the local titler takes text only. */
+function inputModalities(modelId: string): string[] {
+  return isLocalModel(modelId) ? ["text"] : ["text", "image"];
 }
 
 /**
