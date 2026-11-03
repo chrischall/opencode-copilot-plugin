@@ -102,7 +102,7 @@ describe("the opencode 2 setup", () => {
 
   it("leaves a model the user already chose alone", async () => {
     // Transforms replay on every rebuild, so an unconditional `set` would keep
-    // stealing the selection back. v1 was additive for the same reason.
+    // stealing the selection back.
     const harness = fakeContext(withProxy());
     await setup(harness.ctx as never);
 
@@ -118,8 +118,8 @@ describe("the opencode 2 setup", () => {
   });
 
   describe("keeping session titles off M365", () => {
-    // opencode 2 dropped `small_model`, so the v1 trick of pointing it at the local
-    // titler has no equivalent. The title request's model is read-only on the hook,
+    // opencode 2 has no `small_model` to point at the local titler. The title
+    // request's model is read-only on the hook,
     // but its headers are not — see models.ts for why a second conversation per
     // session is the throttle signature we must avoid.
     const titleRequest = (overrides: Record<string, unknown> = {}) => ({

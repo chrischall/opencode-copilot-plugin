@@ -28,11 +28,11 @@ opencode-m365 setup      # adds the plugin to ~/.config/opencode/opencode.json
 opencode                 # models appear as m365/*
 ```
 
-`setup` writes only a plugin reference. The provider, the model list, the default model
-and the small model are all registered by the plugin at startup.
+`setup` writes only a plugin reference. The provider, the model list and the default
+model are all registered by the plugin at startup.
 
-Works on **opencode 1 and opencode 2** from the one install — see
-[opencode 2](#opencode-2) for what differs.
+Needs **opencode 2** — from 2.0.0 the major version tracks it. On opencode 1, stay on
+0.4.x — see [opencode 1](#opencode-1).
 
 ## The thing you need to know first
 
@@ -66,9 +66,7 @@ work and do not (verified against 1.18.18, and the reason the architecture is wh
   array, but the request that reaches the provider still carries the original prompt.
   Setting `agent.<name>.prompt` from the `config` hook is ignored the same way.
 
-The proxy sees the final request, so it is the one place the trim reliably lands. The
-plugin still sets `config.tools` as a declaration of intent, in case a future version
-honours it.
+The proxy sees the final request, so it is the one place the trim reliably lands.
 
 What gets dropped:
 
@@ -116,55 +114,49 @@ warning and carries on.
 
 ## opencode 2
 
-opencode 2 is a separate package family (`@opencode/cli`, `@opencode/plugin`) with a
-different plugin API. This package serves both from a single default export: opencode 1
-calls its `server()`, opencode 2 calls its `setup()`. There is nothing to choose and no
-second install.
+This is an opencode 2 plugin (`@opencode/cli`, `@opencode/plugin`): its default export
+is `{ id, setup }`. A local checkout is referenced by its **directory** — opencode 2
+drops a file path with `configured plugin path must be a directory`, and since it
+swallows plugin load failures, nothing else tells you. `opencode-m365 setup` writes the
+right reference for you.
 
-What differs, and why:
+Everything in [Where the trimming happens](#where-the-trimming-happens-and-why) still
+lives in the proxy. opencode 2 does offer hooks where opencode 1's were dead
+(`ctx.tool.transform`, `session.hook("context")`); neither has been measured against a
+live tenant, so the proxy stays the enforcement point.
 
-| | opencode 1 | opencode 2 |
-|---|---|---|
-| config key | `plugin` | `plugins` |
-| entry form | `[spec, options]` | `{ package, options }` |
-| local reference | the built entrypoint | **a directory** — 2.0.11 drops a file path with `configured plugin path must be a directory`, and since it swallows plugin load failures, nothing else tells you |
-| provider registration | `config.provider.m365` | `ctx.provider.transform` → `editor.add` |
-| openai-compatible driver | installs `@ai-sdk/openai-compatible` | bundled as `@opencode/ai/providers/openai-compatible` |
-| title generation | `small_model` | no such setting — see below |
+### opencode 1
 
-`opencode-m365 setup` writes **both** keys, with the right reference for each. Each
-version silently drops the key it does not know, so the one file serves either.
-
-Everything in [Where the trimming happens](#where-the-trimming-happens-and-why) is
-unchanged, because it all lives in the proxy. opencode 2 does offer working equivalents
-for the two dead v1 hooks (`ctx.tool.transform`, `session.hook("context")`); neither has
-been measured against a live tenant, so the proxy stays the enforcement point.
+opencode 1 is no longer supported. **0.4.x is the last release that loads there** — pin
+it with `npm install -g opencode-m365-copilot@0.4`. 2.0.0 and later under opencode 1
+fail to load with `must default export an object with server()`. Re-running
+`opencode-m365 setup` removes this plugin's entry from opencode 1's `plugin` key, keeping
+any options you set on it, and leaves other plugins' entries alone.
 
 ### Verified how far
 
-The opencode 1 path is verified end to end against a real 1.18.31: the plugin loads, the
-provider registers with all 21 models, and the default and small models are set. The
-dual entry shape is also asserted against decompiled loader logic from 1.18.0, 1.18.18,
-1.18.28 and 1.18.31 in `src/plugin-entry.test.ts` — opencode's docs say the object entry
-form arrived in 1.18.29, but 1.18.0 already has the identical detect path, so the peer
-floor did not move.
-
-The opencode 2 path is covered by unit tests against a stand-in context, and its catalog
-records are checked against the real `@opencode/plugin` schema constructors. It has
-**not** yet been exercised against a live opencode 2 end to end.
+Against a real opencode 2.2.5, end to end, with the proxy running against the offline
+stub rather than Microsoft: the plugin loads from a directory, registers all 21 models,
+an attached image is uploaded and attached to the turn, and the session title is
+answered locally — one chat turn reaches the backend, not two. The catalog records are
+also checked against the real `@opencode/plugin` schema constructors in the test suite.
+Nothing here has been run against a live M365 tenant.
 
 ## Configuration
 
 ```jsonc
 {
-  "plugin": [["opencode-m365-copilot", {
-    "lean": true,              // trim the toolset (default: true)
-    "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
-    "setDefaultModel": true,   // set `model` if you have not (default: true)
-    "setSmallModel": true,     // route title generation to the local titler (default: true)
-    "baseUrl": null,           // use an already-running proxy instead of an in-process one
-    "apiKey": null             // that proxy's secret (or export M365_PROXY_KEY instead)
-  }]]
+  "plugins": [{
+    "package": "opencode-m365-copilot",
+    "options": {
+      "lean": true,              // trim the toolset (default: true)
+      "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
+      "setDefaultModel": true,   // set `model` if you have not (default: true)
+      "setSmallModel": true,     // answer session titles locally (default: true)
+      "baseUrl": null,           // use an already-running proxy instead of an in-process one
+      "apiKey": null             // that proxy's secret (or export M365_PROXY_KEY instead)
+    }
+  }]
 }
 ```
 
@@ -173,20 +165,18 @@ hands it to opencode itself. Only a standalone `opencode-m365 serve` proxy needs
 `serve` prints its key, or takes a fixed one from `M365_PROXY_KEY`. Either put that key
 in `apiKey`, or export the same `M365_PROXY_KEY` to opencode and leave `apiKey` out.
 
-On opencode 2 the same block goes under `plugins`, as `{ "package": ..., "options": ... }`.
+### Why session titles are answered locally
 
-### Why `small_model` is redirected
+opencode titles every new session with a model call on your main model, which on M365
+would open a **second conversation** per session. The account-level throttle counts
+conversations started, not messages, so that is the fastest way to get throttled.
 
-opencode's `small_model` defaults to your main model, so every new session would generate
-its title on M365 — opening a **second conversation**. The account-level throttle counts
-conversations started, not messages, so that is the fastest way to get throttled. The
-`m365/local-title` model is answered by the proxy itself and never opens a connection.
-
-opencode 2 has no `small_model`, and its title hook exposes the model read-only, so the
-same guarantee is reached differently: the plugin marks the title request on a header
-(`x-m365-request-kind: title`) and the proxy answers it locally. Compaction and
-generation are left on the real model — they are real work, and only titling opens the
-extra conversation. `setSmallModel` controls both mechanisms.
+opencode 2 has no `small_model` setting, and its title hook exposes the model read-only,
+so the plugin marks the title request on a header (`x-m365-request-kind: title`) and the
+proxy answers it locally, without opening a connection. Compaction and generation stay
+on the real model — they are real work, and only titling opens the extra conversation.
+`setSmallModel` turns this off; the name dates from opencode 1, where it set
+`small_model`. Any OpenAI client can also select `m365/local-title` by id.
 
 ## Models
 

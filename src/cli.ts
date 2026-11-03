@@ -80,16 +80,17 @@ async function doLogin(args: string[]): Promise<void> {
 }
 
 async function doSetup(args: string[]): Promise<void> {
-  // A local checkout is referenced by its built entrypoint; an npm install by name.
-  // opencode 2 additionally refuses a file path, so it gets the package directory —
-  // see `mergeOpencodeConfig`.
+  // An npm install is referenced by name, a local checkout by its directory —
+  // opencode 2 refuses a file path. `pluginRef` is how older versions referenced us
+  // under opencode 1's key, so that entry can be found and removed; see
+  // `mergeOpencodeConfig`.
   const local = args.includes("--local");
   const dist = dirname(fileURLToPath(import.meta.url));
   const pluginRef = local ? resolve(dist, "plugin.mjs") : "opencode-m365-copilot";
   const pluginDir = local ? resolve(dist, "..") : pluginRef;
 
   if (local && !existsSync(pluginRef)) {
-    console.error(`No build at ${pluginRef}. Run \`pnpm build\` first.`);
+    console.error(`No build at ${pluginRef}. Run \`npm run build\` first.`);
     process.exitCode = 1;
     return;
   }
@@ -113,7 +114,10 @@ async function doSetup(args: string[]): Promise<void> {
   if (hadConfig) copyFileSync(OPENCODE_CONFIG, backup);
   writeFileSync(OPENCODE_CONFIG, `${JSON.stringify(merged, null, 2)}\n`);
 
-  console.log(`Added ${pluginRef} to ${OPENCODE_CONFIG}`);
+  console.log(`Added ${pluginDir} to ${OPENCODE_CONFIG}`);
+  if (existing.plugin !== undefined && JSON.stringify(existing.plugin) !== JSON.stringify(merged.plugin)) {
+    console.log(`(removed this plugin's opencode 1 entry: opencode 1 is no longer supported)`);
+  }
   if (hadConfig) console.log(`(previous version saved as ${backup})`);
   console.log(`\nThe plugin registers the provider itself on startup, so there is nothing`);
   console.log(`else to configure. Models appear as ${PROVIDER_ID}/<model>, defaulting to`);

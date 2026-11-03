@@ -517,7 +517,7 @@ const TITLE_INSTRUCTION = /generate|summar|title|respond with|in a few words|sho
 /**
  * Name a session without spending an M365 conversation on it.
  *
- * opencode's `small_model` defaults to the main model, so titling would open a second
+ * A harness titles each session on the main model by default, which would open a second
  * conversation for every session — and the throttle counts conversations started, not
  * messages. This is not as good as a model-written title; it is free, and it keeps
  * the account out of the throttle.
