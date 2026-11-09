@@ -19,6 +19,8 @@ export const RS = "\x1e";
 
 export interface StubConnection {
   url: string;
+  /** The upgrade request's headers. */
+  headers: IncomingHttpHeaders;
   /** Every frame received from the client, parsed, in arrival order. */
   frames: any[];
   socket: WebSocket;
@@ -94,6 +96,7 @@ export async function startStubCopilot(options: StubOptions = {}): Promise<StubS
   wss.on("connection", (socket, request) => {
     const connection: StubConnection = {
       url: request.url ?? "",
+      headers: request.headers,
       frames: [],
       socket,
       waitForFrame: (predicate, timeoutMs = 3000) =>

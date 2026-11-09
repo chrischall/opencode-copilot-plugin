@@ -209,6 +209,16 @@ export function condenseSystemPrompt(
     result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g"), "");
   }
 
+  // opencode 2's Code Mode section says the listed tools only work inside `execute`.
+  // Lean mode removes `execute`, so the section told the model its tools were unusable.
+  if (!toolNames.has("execute")) {
+    result = result.replace(/^# Code Mode\n[\s\S]*?(?=^# |^Skills provide |^<[a-z_]+>|(?![\s\S]))/m, "");
+    result = dropLines(result, /`execute`/);
+  }
+  if (!toolNames.has("skill")) result = dropLines(result, /^Skills provide |\bskill tool\b|invoke a skill directly/);
+  // Harness advice that contradicts one call per turn and the shell-first framing.
+  result = dropLines(result, /^- Prefer parallelizing independent tool calls|^- Prefer dedicated tools over shell commands/);
+
   if (options.replaceProseWith !== undefined) {
     // Drop only the harness's own persona prose. Keep the user's instructions —
     // opencode injects project and global rules as PROSE under an
@@ -219,6 +229,14 @@ export function condenseSystemPrompt(
   }
 
   return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Remove every line matching `pattern`. */
+function dropLines(text: string, pattern: RegExp): string {
+  return text
+    .split("\n")
+    .filter((line) => !pattern.test(line))
+    .join("\n");
 }
 
 const BLOCK_PATTERN = /<([a-z_][a-z0-9_-]*)>[\s\S]*?<\/\1>/gi;
@@ -313,7 +331,7 @@ export function buildTurnPrompt(
     }
   }
 
-  if (tools.length > 0) parts.push(buildToolPrompt(tools));
+  if (tools.length > 0) parts.push(buildToolPrompt(tools, { firstTurn: isFirstTurn }));
 
   // Correlate tool results back to the call that produced them, so the label can say
   // what the output actually is.

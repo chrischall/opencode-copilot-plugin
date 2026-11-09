@@ -248,7 +248,11 @@ export class CopilotSession {
     const { annotations, note } = await this.uploadImages(token, turn);
     const message: OutgoingMessage = { text: note ? `${text}\n\n${note}` : text, annotations };
 
-    const socket = new WebSocket(url, { headers: BROWSER_HEADERS });
+    // Pins every turn of the conversation to one backend. Without it the reference
+    // project saw most turns of a long session run on a forked copy of the history.
+    const socket = new WebSocket(url, {
+      headers: { ...BROWSER_HEADERS, "X-RoutingParameter-SessionKey": this.conversationId },
+    });
     try {
       const result = await this.pump(socket, message, turn);
       this.turnIndex += 1;

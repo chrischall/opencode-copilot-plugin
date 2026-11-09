@@ -177,6 +177,12 @@ function shapeOf(tool: ToolDef): ToolShape {
 export interface PromptOptions {
   /** Override the shell-routing framing (mainly for experiments). */
   shellFraming?: boolean;
+  /**
+   * Whether this is the conversation's first turn. Later turns must not say nothing
+   * has run: the block is re-sent every turn, and a contradiction with the transcript
+   * is a reason for the model to stop trusting it. Defaults to true.
+   */
+  firstTurn?: boolean;
 }
 
 /**
@@ -227,11 +233,15 @@ export function buildToolPrompt(tools: readonly ToolDef[], options: PromptOption
       `Prefer doing the whole step by writing one \`\`\`${shell.function.name} block: heredocs to create files, sed to edit, cat/ls/grep to inspect.`,
     );
   }
+  if (options.firstTurn ?? true) {
+    lines.push(
+      "You have not run anything yet, so do not describe what a command would return or say a file is empty — run it and read the result.",
+    );
+  } else {
+    lines.push("Read each tool result before deciding the next step, rather than guessing what a command returned.");
+  }
   lines.push(
-    "You have not run anything yet, so do not describe what a command would return or say a file is empty — run it and read the result.",
-  );
-  lines.push(
-    "Only say the work is done once a tool result above this line proves it. When you have the final answer, give it plainly with no preamble.",
+    "Only say the work is done once a tool result proves it. When you have the final answer, give it plainly with no preamble.",
   );
   lines.push("</tools>");
 
