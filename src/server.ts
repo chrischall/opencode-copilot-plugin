@@ -17,7 +17,7 @@ import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel } from "./models.js";
 import { describeToolSelection, selectLeanTools } from "./config.js";
-import { CopilotSession, DisengagedError } from "./session.js";
+import { CopilotSession, DisengagedError, TurnRejectedError } from "./session.js";
 import {
   ChatCompletionRequest,
   ConversationPool,
@@ -453,6 +453,9 @@ function finishStream(
   response.end();
 }
 
+/** opencode retries a 5xx several times and a 4xx not at all (measured on 2.2.5). */
+const NON_RETRYABLE = 422;
+
 function handleTurnFailure(response: ServerResponse, error: unknown, streaming: boolean, toolCount: number): void {
   if (error instanceof AuthRequiredError) {
     finishWithError(response, streaming, 401, "authentication_required", error.message);
@@ -466,7 +469,12 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
       toolCount >= 12
         ? ` The request carried ${toolCount} tools; M365 disengages persistently above roughly 12. Reduce the toolset — see the lean profile in the opencode plugin.`
         : " M365 refused to engage with this prompt. Retrying will not help; reduce the toolset or simplify the prompt.";
-    finishWithError(response, streaming, 502, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
+    finishWithError(response, streaming, NON_RETRYABLE, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
+    return;
+  }
+
+  if (error instanceof TurnRejectedError) {
+    finishWithError(response, streaming, NON_RETRYABLE, "m365_turn_rejected", error.message);
     return;
   }
 

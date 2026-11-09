@@ -140,7 +140,7 @@ stub rather than Microsoft: the plugin loads from a directory, registers all 21 
 an attached image is uploaded and attached to the turn, and the session title is
 answered locally — one chat turn reaches the backend, not two. The catalog records are
 also checked against the real `@opencode/plugin` schema constructors in the test suite.
-Nothing here has been run against a live M365 tenant.
+That stub run says nothing about Microsoft's side; see [Development](#development) for what has been run live.
 
 ## Configuration
 
@@ -180,16 +180,22 @@ on the real model — they are real work, and only titling opens the extra conve
 
 ## Models
 
-Models are selected by an M365 *tone*, not a model id. `m365/gpt-5.5-think-deeper` is the
-default.
+Models are selected by an M365 *tone*, not a model id. `m365/quick` is the default.
 
-> **A conflict worth knowing about.** The reference project's README recommends
-> `gpt-5.5-think-deeper` and reports 100% tool compliance with the agent plus
-> fenced/shell-routing. Its own protocol notes (`m365-copilot-api.md`, quirk #13) say the
-> opposite — that reasoning tones meta-analyse the injected prompt and disengage, and
-> only `magic`/`*_Quick` work with an agent attached. The README is the newer
-> measurement, so it is the default here; if you see disengagement on tool turns, try
-> `m365/quick` or `m365/m365-copilot`.
+Tool-calling on a live tenant (2026-11-09, one non-Premium account, a single file-read
+task per run; small samples):
+
+| Model | Made the tool call |
+|---|---|
+| `m365/quick` | 5/5 |
+| `m365/m365-copilot` | 1/1 |
+| `m365/gpt-5.5` (same tone as `quick`) | 0/1 |
+| `m365/gpt-5.6` | 0/1 |
+| `m365/gpt-5.5-think-deeper` | 0/3 — says it has no file tool |
+
+The reference project's README reports 100% tool compliance for `gpt-5.5-think-deeper`;
+its protocol notes (`m365-copilot-api.md`, quirk #13) say reasoning tones disengage with
+an agent attached. Our runs agree with the notes. Reasoning tones still serve plain chat.
 
 A non-default tone (Claude, the reasoning tones) only takes effect when **no** agent is
 attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
@@ -269,7 +275,8 @@ opencode-m365 login [--interactive]   # sign in
 opencode-m365 setup [--local]         # register the plugin with opencode
 opencode-m365 serve [--port 4141]     # run the proxy standalone, for any OpenAI client
                                       # (send its key as `Authorization: Bearer`)
-opencode-m365 doctor                  # check auth, agent, proxy and opencode wiring
+opencode-m365 doctor [--live]         # check auth, agent, proxy and opencode wiring
+                                      # (--live sends one short message per model tone)
 ```
 
 ## Images
@@ -317,12 +324,12 @@ Tests run against a stub SignalR server (`test/stub-copilot.ts`) that speaks the
 framing, so a full turn — including the mandatory `Metrics` frame, ping handling,
 Disengaged detection and the stop-on-abort frame — is exercised offline.
 
-**No live M365 traffic has been run against this implementation.** Everything above about
-opencode's behaviour is measured; everything about M365's behaviour is implemented from
-the protocol notes in
+Chat, tool calling and agent provisioning have been run against one live tenant, through
+opencode 2.2.5. Image upload has not, and file edits, shell commands and multi-step tasks
+have not been exercised there. Other M365 behaviour is implemented from the protocol notes in
 [cramt/m365-copilot-proxy](https://github.com/cramt/m365-copilot-proxy) (MIT), whose
-`docs/` are the source of truth for this surface. Run `opencode-m365 doctor` against your
-own tenant before trusting it.
+`docs/` are the source of truth for this surface. Run `opencode-m365 doctor --live`
+against your own tenant before trusting it.
 
 ## Credit
 

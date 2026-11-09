@@ -14,7 +14,9 @@ import { fileURLToPath } from "node:url";
 import { createTokenClient } from "./auth.js";
 import { getOrCreateAgent } from "./agent.js";
 import { PROVIDER_ID, mergeOpencodeConfig, type PluginPathInfo } from "./config.js";
-import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
+import { checkTones, distinctTones } from "./live-check.js";
+import { DEFAULT_MODEL, LOCAL_TITLE_MODEL, MODELS } from "./models.js";
+import { CopilotSession } from "./session.js";
 import { startServer } from "./server.js";
 import { AGENT_FILE, CACHE_FILE, CONFIG_DIR, SECRETS_FILE } from "./paths.js";
 
@@ -31,7 +33,7 @@ async function main(): Promise<void> {
     case "serve":
       return doServe(rest);
     case "doctor":
-      return doDoctor();
+      return doDoctor(rest);
     case "help":
     case "--help":
     case "-h":
@@ -50,7 +52,8 @@ function printHelp(): void {
   setup [--local]         Add the plugin to ~/.config/opencode/opencode.json
   serve [--port <n>]      Run the OpenAI-compatible proxy standalone
                           (key from M365_PROXY_KEY, else printed)
-  doctor                  Check auth, the agent, and the proxy
+  doctor [--live]         Check auth, the agent, and the proxy
+                          (--live also sends one short message per model tone)
 
 Config lives in ${CONFIG_DIR}
 
@@ -179,7 +182,7 @@ async function doServe(args: string[]): Promise<void> {
   });
 }
 
-async function doDoctor(): Promise<void> {
+async function doDoctor(args: string[]): Promise<void> {
   let failures = 0;
   const check = (label: string, ok: boolean, detail = "") => {
     console.log(`  ${ok ? "ok  " : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
@@ -232,6 +235,18 @@ async function doDoctor(): Promise<void> {
     await proxy.close();
   } catch (error) {
     check("starts", false, (error as Error).message);
+  }
+
+  if (args.includes("--live")) {
+    console.log("\nLive turns (one conversation, one short message per tone)");
+    if (!signedIn) {
+      console.log("  skip  needs a signed-in account");
+    } else {
+      const session = new CopilotSession({ getToken: () => tokens.getToken() });
+      for (const { tone, ok, detail } of await checkTones(session, distinctTones(MODELS))) {
+        check(tone, ok, detail);
+      }
+    }
   }
 
   console.log("\nopencode");

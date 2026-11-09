@@ -109,6 +109,14 @@ export class DisengagedError extends Error {
   }
 }
 
+/** The server refused the invocation outright — a retired tone, typically. Retrying cannot help. */
+export class TurnRejectedError extends Error {
+  constructor(detail: string) {
+    super(`M365 rejected the turn: ${detail}`);
+    this.name = "TurnRejectedError";
+  }
+}
+
 export interface ThrottleState {
   current: number;
   max: number;
@@ -371,7 +379,7 @@ export class CopilotSession {
 
             case 3:
               if (frame.error) {
-                finish(new Error(`M365 rejected the turn: ${frame.error}`));
+                finish(new TurnRejectedError(frame.error));
                 return;
               }
               finish();

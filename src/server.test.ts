@@ -267,7 +267,7 @@ describe("chat completions", () => {
     const { url } = await start();
     await post(url, { model: "quick", messages: [{ role: "user", content: "hi" }] });
     const chat = stub.last().frames.find((f) => f.type === 4);
-    expect(chat.arguments[0].tone).toBe("Gpt_Quick");
+    expect(chat.arguments[0].tone).toBe("Gpt_5_5_Chat");
   });
 
   it("converts a fenced block into tool_calls", async () => {
@@ -636,7 +636,8 @@ describe("failures the client has to be able to tell apart", () => {
     stub = await startStubCopilot({ respond: () => [disengaged(), completion()] });
     const { url } = await start();
     const response = await post(url, { messages: [{ role: "user", content: "hi" }], tools: [bashTool] });
-    expect(response.status).toBe(502);
+    // Not a 5xx: opencode retries those, and retrying a disengage only makes it worse.
+    expect(response.status).toBe(422);
     const body: any = await response.json();
     expect(body.error.code).toBe("m365_disengaged");
     expect(body.error.message).toMatch(/tool/i);
@@ -669,10 +670,13 @@ describe("failures the client has to be able to tell apart", () => {
     expect((await post(url, { messages: [] })).status).toBe(400);
   });
 
-  it("maps an upstream failure to 502", async () => {
+  it("reports a rejected turn as non-retryable", async () => {
+    // A retired tone fails every time, and opencode retries any 5xx several times over.
     stub = await startStubCopilot({ respond: () => [completion("Failed to invoke 'Chat'")] });
     const { url } = await start();
-    expect((await post(url, { messages: [{ role: "user", content: "hi" }] })).status).toBe(502);
+    const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(422);
+    expect((await response.json() as any).error.code).toBe("m365_turn_rejected");
   });
 
   it("reports a dropped connection as a 502, not an empty 200 completion", async () => {
