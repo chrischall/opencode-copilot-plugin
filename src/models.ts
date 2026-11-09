@@ -21,6 +21,11 @@ export interface ModelInfo {
   tone: string | null;
   /** Whether this is a reasoning tone (10-30s per turn). */
   reasoning: boolean;
+  /**
+   * Ground turns on the signed-in mailbox (Outlook side-pane scenario +
+   * `WorkSearch`). Off for coding/web models; on for the `work*` models.
+   */
+  grounded?: boolean;
   limit: { context: number; output: number };
 }
 
@@ -59,6 +64,11 @@ export const LOCAL_TITLE_MODEL = "local-title";
 export const DEFAULT_MODEL = "gpt-5.5-think-deeper";
 
 export const MODELS: readonly ModelInfo[] = [
+  // Mailbox-grounded models: select these in opencode (as `m365/work` /
+  // `m365/work-think`) to ask about your own mail, calendar and files — Copilot
+  // searches them server-side. The other models stay coding/web-only.
+  m("work", "M365 Copilot (Work — reads your mailbox)", "magic", false, true),
+  m("work-think", "M365 Copilot (Work, Think Deeper)", "Gpt_5_5_Reasoning", true, true),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
@@ -82,8 +92,8 @@ export const MODELS: readonly ModelInfo[] = [
   m(LOCAL_TITLE_MODEL, "Local titler (no M365 call)", null, false),
 ];
 
-function m(id: string, name: string, tone: string | null, reasoning: boolean): ModelInfo {
-  return { id, name, tone, reasoning, limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS } };
+function m(id: string, name: string, tone: string | null, reasoning: boolean, grounded = false): ModelInfo {
+  return { id, name, tone, reasoning, grounded, limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS } };
 }
 
 const BY_ID = new Map(MODELS.map((model) => [model.id, model]));

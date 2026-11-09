@@ -18,6 +18,15 @@ describe("model catalog", () => {
     }
   });
 
+  it("marks the work models mailbox-grounded, and leaves coding models ungrounded", () => {
+    expect(resolveModel("work").grounded).toBe(true);
+    expect(resolveModel("work-think").grounded).toBe(true);
+    expect(resolveModel("work").tone).toBeTruthy();
+    expect(resolveModel("gpt-5.5").grounded).toBeFalsy();
+    // Addressed as m365/<id> by opencode; the provider-stripped form resolves too.
+    expect(resolveModel("m365/work").grounded).toBe(true);
+  });
+
   it("has unique ids", () => {
     const ids = MODELS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);

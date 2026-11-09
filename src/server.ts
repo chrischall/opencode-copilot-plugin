@@ -376,7 +376,9 @@ async function runTurn(
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
   // actually needs tool instructions. Plain chat then reaches the tone's real model.
-  const agent = tools.length > 0 ? await context.agentId() : null;
+  // A grounded (mailbox) model brings its own built-in agent, so skip the
+  // declarative coding agent there.
+  const agent = !model.grounded && tools.length > 0 ? await context.agentId() : null;
 
   const abort = new AbortController();
   request.on("close", () => {
@@ -386,8 +388,10 @@ async function runTurn(
   const streaming = body.stream === true;
   const streamId = `chatcmpl-${randomUUID()}`;
   // Only a tool-less turn can stream: a fenced tool call is not parseable until the
-  // fence closes, so a tool turn has to be buffered and emitted at the end.
-  const canStreamText = streaming && tools.length === 0;
+  // fence closes, so a tool turn has to be buffered and emitted at the end. A
+  // grounded turn is also buffered, so its answer is emitted once with the citation
+  // tokens already stripped rather than streaming them raw.
+  const canStreamText = streaming && tools.length === 0 && !model.grounded;
 
   if (streaming) startSse(response);
 
@@ -395,6 +399,7 @@ async function runTurn(
     const result = await conversation.session.run(prompt, {
       ...(model.tone ? { tone: model.tone } : {}),
       agentId: agent,
+      ...(model.grounded ? { grounded: true } : {}),
       signal: abort.signal,
       ...(images.length > 0 ? { images } : {}),
       ...(canStreamText
