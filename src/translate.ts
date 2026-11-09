@@ -209,15 +209,20 @@ export function condenseSystemPrompt(
     result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g"), "");
   }
 
-  // opencode 2's Code Mode section says the listed tools only work inside `execute`.
-  // Lean mode removes `execute`, so the section told the model its tools were unusable.
-  if (!toolNames.has("execute")) {
-    result = result.replace(/^# Code Mode\n[\s\S]*?(?=^# |^Skills provide |^<[a-z_]+>|(?![\s\S]))/m, "");
-    result = dropLines(result, /`execute`/);
-  }
-  if (!toolNames.has("skill")) result = dropLines(result, /^Skills provide |\bskill tool\b|invoke a skill directly/);
-  // Harness advice that contradicts one call per turn and the shell-first framing.
-  result = dropLines(result, /^- Prefer parallelizing independent tool calls|^- Prefer dedicated tools over shell commands/);
+  // Only the harness's own text is trimmed: the user's rules pass through verbatim,
+  // even where they name a tool lean mode dropped.
+  result = outsideUserRules(result, (harness) => {
+    let text = harness;
+    // opencode 2's Code Mode section says the listed tools only work inside `execute`.
+    // Lean mode removes `execute`, so the section told the model its tools were unusable.
+    if (!toolNames.has("execute")) {
+      text = text.replace(/^# Code Mode\n[\s\S]*?(?=^# |^Skills provide |^<[a-z_]+>|(?![\s\S]))/m, "");
+      text = dropLines(text, /`execute`/);
+    }
+    if (!toolNames.has("skill")) text = dropLines(text, /^Skills provide |\bskill tool\b|invoke a skill directly/);
+    // Harness advice that contradicts one call per turn and the shell-first framing.
+    return dropLines(text, /^- Prefer parallelizing independent tool calls|^- Prefer dedicated tools over shell commands/);
+  });
 
   if (options.replaceProseWith !== undefined) {
     // Drop only the harness's own persona prose. Keep the user's instructions —
@@ -229,6 +234,29 @@ export function condenseSystemPrompt(
   }
 
   return result.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Apply `trim` to everything except the user's rules files.
+ *
+ * opencode puts each rules file under an `Instructions from: <path>` line, and follows
+ * the last with its own `Today's date:` line and `<env>`. A rules section runs until the
+ * next of those. Rules files are Markdown with blank lines of their own, so a blank
+ * line is not a boundary.
+ */
+function outsideUserRules(text: string, trim: (harness: string) => string): string {
+  const out: string[] = [];
+  let cursor = 0;
+  for (const start of text.matchAll(/^Instructions from:[ \t]*\S.*$/gm)) {
+    if (start.index < cursor) continue;
+    out.push(trim(text.slice(cursor, start.index)));
+    const after = start.index + start[0].length;
+    const next = text.slice(after).search(/^(?:Instructions from:|Today's date:|<[a-z_]+>)/m);
+    cursor = next === -1 ? text.length : after + next;
+    out.push(text.slice(start.index, cursor));
+  }
+  out.push(trim(text.slice(cursor)));
+  return out.join("");
 }
 
 /** Remove every line matching `pattern`. */

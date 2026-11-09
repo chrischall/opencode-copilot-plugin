@@ -255,6 +255,27 @@ describe("condensing the harness system prompt", () => {
     expect(condensed).toContain("GitHub-flavored Markdown");
   });
 
+  it("never trims the user's own rules, even where they name a dropped tool", () => {
+    // opencode 2.2.5's layout: harness text, then each rules file under an
+    // `Instructions from:` line, then the date and <env>, then one more harness line.
+    const rules = [
+      "Instructions from: /repo/AGENTS.md",
+      "# Project rules",
+      "",
+      "- Always run `npm test` before you execute a release.",
+      "- Never use the `execute` tool for file edits.",
+      "- Use the skill tool sparingly.",
+      "- Prefer parallelizing independent tool calls.",
+      "",
+    ].join("\n");
+    const prompt = opencode2Prompt.replace("<env>", `${rules}\n\nToday's date: Mon Nov 09 2026\n<env>`);
+    const condensed = condenseSystemPrompt(prompt, leanFive);
+    expect(condensed).toContain(rules.trim());
+    expect(condensed).toContain("Today's date: Mon Nov 09 2026");
+    // The harness's own text around them is still trimmed.
+    expect(condensed).not.toMatch(/# Code Mode|tools\.opencode\.session_move|Skills provide/);
+  });
+
   it("keeps Code Mode and skills when their tools are offered", () => {
     const withBoth = [...leanFive, ...["execute", "skill"].map(
       (name): ToolDef => ({ type: "function", function: { name, parameters: { type: "object", properties: {} } } }),
