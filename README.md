@@ -70,12 +70,20 @@ The proxy sees the final request, so it is the one place the trim reliably lands
 
 What gets dropped:
 
-- **Tools** — keeps `bash`, `read`, `grep`, and whichever editing tool is present
-  (`apply_patch` in 1.18.18, `edit`/`write` in others). Drops `glob`, `skill`, `task`,
-  `todowrite`, `webfetch`, `websearch`, `lsp`, `question`.
+- **Tools** — keeps the shell tool under whatever name the harness gives it (`shell`
+  in opencode 2, `bash` before), `read`, `grep`, and the editing tools (`edit`/`write`,
+  or `apply_patch`). On opencode 2.2.5 that is five of thirteen; `execute`, `glob`,
+  `skill`, `subagent`, `webfetch`, `websearch` and `question` are dropped.
 - **Capability catalogues** — `<available_skills>` is removed when no `skill` tool
   survives the trim, because it advertises capabilities nothing can invoke. `<env>` and
   other structured context are kept.
+- **Text about dropped tools** — opencode 2's "Code Mode" section says the listed tools
+  only work inside `execute`, which the trim removes, so the model was being told its
+  tools were unusable. That section, any line naming `execute`, and the skills
+  paragraph go with their tools, as do two harness lines that contradict the
+  contract ("prefer parallelizing tool calls", "prefer dedicated tools over shell
+  commands"). On opencode 2.2.5 this takes the system prompt from about 8,000
+  characters to about 2,000.
 - **The harness's prose system prompt** — replaced with a short one, but **off by
   default**. A long, polished assistant prompt measurably reduces M365's tool
   compliance on another harness's numbers; that is a borrowed result we have not
@@ -83,7 +91,7 @@ What gets dropped:
   never dropped either way: opencode injects `AGENTS.md` and global rules as prose
   inside the system message, and those sections are preserved verbatim.
 
-`bash` is never dropped. M365's chat-tuned model will not "act as an agent" on request,
+The shell tool is never dropped. M365's chat-tuned model will not "act as an agent" on request,
 but it *will* reflexively write a ```` ```bash ```` block — routing that block to the
 shell tool is the single lever that makes tool calling work at all.
 
@@ -111,6 +119,34 @@ deleted — another host may be mid-conversation with it.
 
 Without Copilot Studio access the plugin still works, just less reliably; it logs a
 warning and carries on.
+
+Three things keep a turn on track:
+
+- **A tolerant parser.** M365 writes calls loosely: the command as a `command:` header,
+  `filePath:` for `path`, quoted values, a copied `$ ` prompt, prose or an invented
+  `<tool_response>` after the block. These are read as the call the model meant.
+- **One nudge after a give-up.** Chat tones sometimes answer a tool turn with "no tool
+  is available" without trying. The proxy then asks once more, softly, in the same
+  conversation (one extra message, no new conversation), worded differently once
+  tools have already run.
+- **A pinned backend.** Every turn's connection carries
+  `X-RoutingParameter-SessionKey`, which the reference project found stops long
+  sessions running on a forked copy of the conversation.
+
+Measured on one tenant on 2026-11-09 (`m365/quick`, opencode 2.2.5, 36 conversations,
+alternating builds), with and without the prompt trimming, nudge and routing header.
+Both builds had the tolerant parser:
+
+| Task | Without | With |
+|---|---|---|
+| Fix a bug, then rerun its test | 6/6, 5.3 turns | 6/6, 5.0 turns |
+| Find a value across six files | 6/6, 2.7 turns | 6/6, 2.0 turns |
+| Edit one config value, leave the rest | 6/6, 3.5 turns | 6/6, 4.5 turns (re-read the file to check, 3 of 6) |
+
+Every run made its tool call on the first turn, so the nudge never fired; that it
+recovers a give-up is tested offline only. No turn disengaged, and none ran on a
+forked conversation (`turnCount` rose by one each turn). Long sessions and the
+reasoning tones are not yet measured.
 
 ## opencode 2
 

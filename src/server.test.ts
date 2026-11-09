@@ -631,6 +631,61 @@ describe("streaming", () => {
   });
 });
 
+describe("a give-up on a tool turn", () => {
+  const giveUp = "I can't run commands because no shell execution tool is available in this session.";
+  const chats = () => stub!.connections.map((c) => c.frames.find((f) => f.type === 4 && f.target === "chat"));
+
+  it("asks once more in the same conversation, and returns the tool call that follows", async () => {
+    let turn = 0;
+    stub = await startStubCopilot({
+      respond: () => [streamItem(turn++ === 0 ? giveUp : "```bash\nls\n```"), completion()],
+    });
+    const { url } = await start();
+    const body: any = await (await post(url, { messages: [{ role: "user", content: "list files" }], tools: [bashTool] })).json();
+    expect(body.choices[0].finish_reason).toBe("tool_calls");
+    const [first, second] = chats();
+    expect(second.arguments[0].conversationId).toBe(first.arguments[0].conversationId);
+    expect(second.arguments[0].message.text).toMatch(/first step/i);
+  });
+
+  it("words the nudge for a task already under way", async () => {
+    let turn = 0;
+    stub = await startStubCopilot({ respond: () => [streamItem(turn++ === 0 ? giveUp : "```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, {
+      messages: [
+        { role: "user", content: "list files" },
+        { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "bash", arguments: "{\"command\":\"pwd\"}" } }] },
+        { role: "tool", tool_call_id: "c1", content: "/tmp/w" },
+      ],
+      tools: [bashTool],
+    });
+    expect(chats()[1].arguments[0].message.text).toMatch(/really ran/);
+  });
+
+  it("gives up after one nudge rather than looping", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem(giveUp), completion()] });
+    const { url } = await start();
+    const body: any = await (await post(url, { messages: [{ role: "user", content: "list files" }], tools: [bashTool] })).json();
+    expect(body.choices[0].message.content).toBe(giveUp);
+    expect(stub.connections).toHaveLength(2);
+  });
+
+  it("leaves a real answer alone", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("There are three files."), completion()] });
+    const { url } = await start();
+    await post(url, { messages: [{ role: "user", content: "how many files?" }], tools: [bashTool] });
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("never nudges a turn without tools", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem(giveUp), completion()] });
+    const { url } = await start();
+    await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(stub.connections).toHaveLength(1);
+  });
+});
+
 describe("the turn log", () => {
   it("records what M365 sent back and what was parsed out of it", async () => {
     stub = await startStubCopilot({

@@ -140,6 +140,19 @@ describe("sending a turn", () => {
   });
 });
 
+describe("routing", () => {
+  it("pins every turn of a conversation to one backend", async () => {
+    // Without it the reference project saw most long-session turns run on a fork.
+    stub = await startStubCopilot();
+    const session = sessionFor(stub);
+    await session.run("one");
+    await session.run("two");
+    for (const connection of stub.connections) {
+      expect(connection.headers["x-routingparameter-sessionkey"]).toBe(session.conversationId);
+    }
+  });
+});
+
 describe("agent attachment", () => {
   it("references the declarative agent when one is supplied", async () => {
     stub = await startStubCopilot();

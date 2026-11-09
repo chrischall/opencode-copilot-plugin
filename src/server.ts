@@ -34,6 +34,7 @@ import {
 } from "./translate.js";
 import { collectImages } from "./image.js";
 import { parseToolCalls } from "./fenced.js";
+import { looksLikeGiveUp, nudgeFor } from "./giveup.js";
 import { createLogger } from "./log.js";
 
 const log = createLogger("server");
@@ -371,6 +372,8 @@ export interface TurnLogEntry {
   throttle?: TurnResult["throttle"];
   scores?: Record<string, number>;
   resultValue?: string;
+  /** This turn was the follow-up sent after a give-up. */
+  nudged?: boolean;
   error?: string;
 }
 
@@ -446,22 +449,13 @@ async function runTurn(
       ...fields,
     });
 
-  try {
-    const result = await conversation.session.run(prompt, {
-      ...(model.tone ? { tone: model.tone } : {}),
-      agentId: agent,
-      ...(model.grounded ? { grounded: true } : {}),
-      signal: abort.signal,
-      ...(images.length > 0 ? { images } : {}),
-      ...(canStreamText
-        ? { onDelta: (chunk: string) => response.write(streamChunk(streamId, model.id, { content: chunk })) }
-        : {}),
-    });
-
-    // +1 for the reply the client is about to append to its history: M365 already
-    // has that turn, and sending it back would paste its own answer in as user input.
-    conversation.sentMessageCount = body.messages.length + 1;
-
+  const turnOptions = {
+    ...(model.tone ? { tone: model.tone } : {}),
+    agentId: agent,
+    ...(model.grounded ? { grounded: true } : {}),
+    signal: abort.signal,
+  };
+  const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) =>
     logTurn({
       reply: result.text,
       toolCalls: parseToolCalls(result.text, effectiveTools).toolCalls.map((call) => call.name),
@@ -470,7 +464,37 @@ async function runTurn(
       ...(result.throttle ? { throttle: result.throttle } : {}),
       ...(result.scores ? { scores: result.scores } : {}),
       ...(result.resultValue ? { resultValue: result.resultValue } : {}),
+      ...extra,
     });
+
+  try {
+    let result = await conversation.session.run(prompt, {
+      ...turnOptions,
+      ...(images.length > 0 ? { images } : {}),
+      ...(canStreamText
+        ? { onDelta: (chunk: string) => response.write(streamChunk(streamId, model.id, { content: chunk })) }
+        : {}),
+    });
+
+    // A tool turn answered with "I have no tools" is a stochastic give-up, not an
+    // answer: ask once more in the same conversation, which costs a message but
+    // not a new conversation.
+    if (
+      effectiveTools.length > 0 &&
+      parseToolCalls(result.text, effectiveTools).toolCalls.length === 0 &&
+      looksLikeGiveUp(result.text)
+    ) {
+      recordTurn(result);
+      const midTask = body.messages.some((message) => message.role === "tool");
+      result = await conversation.session.run(nudgeFor(midTask), turnOptions);
+      recordTurn(result, { nudged: true });
+    } else {
+      recordTurn(result);
+    }
+
+    // +1 for the reply the client is about to append to its history: M365 already
+    // has that turn, and sending it back would paste its own answer in as user input.
+    conversation.sentMessageCount = body.messages.length + 1;
 
     if (!streaming) {
       sendJson(response, 200, buildCompletion(result, { model: model.id, tools: effectiveTools, allowMultiple: context.deps.allowMultiTool ?? false }));

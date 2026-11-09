@@ -117,6 +117,14 @@ describe("building the turn prompt", () => {
     expect(prompt).toContain("```bash");
   });
 
+  it("only says nothing has run yet on the first turn", () => {
+    // Repeated every turn, it contradicted the transcript from turn two on.
+    expect(buildTurnPrompt([user("list the files")], [bashTool], 0)).toMatch(/not run anything yet/);
+    const later = buildTurnPrompt([user("list the files"), user("now count them")], [bashTool], 1);
+    expect(later).toContain("<tools>");
+    expect(later).not.toMatch(/not run anything yet|above this line/);
+  });
+
   it("omits the tool block entirely when there are no tools", () => {
     expect(buildTurnPrompt([user("what is 7x8?")], [], 0)).not.toContain("<tools>");
   });
@@ -191,6 +199,69 @@ describe("condensing the harness system prompt", () => {
   it("drops an agent catalogue when there is no tool to delegate with", () => {
     const text = "Prose.\n<available_agents>\n<agent>reviewer</agent>\n</available_agents>";
     expect(condenseSystemPrompt(text, [])).not.toContain("<available_agents>");
+  });
+
+  // The shape of opencode 2.2.5's system prompt (2026-11-09), cut down. Its Code Mode
+  // section says every listed tool only works inside `execute`, and lean mode removes
+  // `execute` — so the model was told its tools were unusable.
+  const opencode2Prompt = [
+    "You are opencode.",
+    "",
+    "# Harness",
+    "- Responses are rendered as GitHub-flavored Markdown.",
+    "- Prefer parallelizing independent tool calls.",
+    "- Prefer dedicated tools over shell commands; fall back to the shell when a tool cannot do what you need.",
+    "",
+    "# Your Model",
+    "- Model ID: quick",
+    "# Code Mode",
+    "",
+    "The tools listed below cannot be called directly: they only work as JavaScript inside the `execute` tool. Every other tool you have is a normal tool call: call it directly, never inside `execute`.",
+    "",
+    "## Code Mode tools (call only inside `execute`)",
+    "",
+    "- opencode (8 tools) // Tools for managing OpenCode itself",
+    "  tools.opencode.session_move(input: {",
+    "  directory: string,",
+    "}): Promise<{ moved: boolean }> // Move the session.",
+    "",
+    "Skills provide specialized instructions and workflows for specific tasks.",
+    "Use the skill tool to load a skill when a task matches its description.",
+    "The user may also invoke a skill directly.",
+    skillsCatalogue,
+    "<env>",
+    "  Working directory: /tmp/w",
+    "</env>",
+    "When you create a worktree, consider using `execute` to call `tools.opencode.session_move`.",
+  ].join("\n");
+  const leanFive = ["edit", "grep", "read", "shell", "write"].map(
+    (name): ToolDef => ({ type: "function", function: { name, parameters: { type: "object", properties: {} } } }),
+  );
+
+  it("drops opencode 2's Code Mode section when execute is not offered", () => {
+    const condensed = condenseSystemPrompt(opencode2Prompt, leanFive);
+    expect(condensed).not.toMatch(/Code Mode|execute|session_move/);
+    expect(condensed).toContain("# Your Model");
+    expect(condensed).toContain("Working directory: /tmp/w");
+  });
+
+  it("drops the skills paragraph along with its catalogue", () => {
+    expect(condenseSystemPrompt(opencode2Prompt, leanFive)).not.toMatch(/skill/i);
+  });
+
+  it("drops harness advice that contradicts one call per turn and the shell-first framing", () => {
+    const condensed = condenseSystemPrompt(opencode2Prompt, leanFive);
+    expect(condensed).not.toMatch(/parallelizing|dedicated tools over shell/);
+    expect(condensed).toContain("GitHub-flavored Markdown");
+  });
+
+  it("keeps Code Mode and skills when their tools are offered", () => {
+    const withBoth = [...leanFive, ...["execute", "skill"].map(
+      (name): ToolDef => ({ type: "function", function: { name, parameters: { type: "object", properties: {} } } }),
+    )];
+    const condensed = condenseSystemPrompt(opencode2Prompt, withBoth);
+    expect(condensed).toContain("# Code Mode");
+    expect(condensed).toContain("Use the skill tool");
   });
 
   it("leaves a prompt with no catalogues untouched", () => {
