@@ -631,7 +631,72 @@ describe("streaming", () => {
   });
 });
 
+describe("the turn log", () => {
+  it("records what M365 sent back and what was parsed out of it", async () => {
+    stub = await startStubCopilot({
+      respond: () => [streamItem("```bash\nls\n```", { contentOrigin: "DeepLeo", turnCount: 1 }), completion()],
+    });
+    const entries: any[] = [];
+    const { url } = await start({ turnLog: (entry: unknown) => entries.push(entry) });
+    await post(url, { model: "quick", messages: [{ role: "user", content: "list files" }], tools: [bashTool] });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      model: "quick",
+      tone: "Gpt_5_5_Chat",
+      agent: true,
+      tools: ["bash"],
+      reply: "```bash\nls\n```",
+      toolCalls: ["bash"],
+      contentOrigin: "DeepLeo",
+      turnCount: 1,
+    });
+  });
+
+  it("records a failed turn too", async () => {
+    stub = await startStubCopilot({ respond: () => [completion("Failed to invoke 'Chat'")] });
+    const entries: any[] = [];
+    const { url } = await start({ turnLog: (entry: unknown) => entries.push(entry) });
+    await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(entries[0].error).toMatch(/Failed to invoke/);
+  });
+});
+
 describe("failures the client has to be able to tell apart", () => {
+  it("reports a throttle as non-retryable, since every retry extends it", async () => {
+    // opencode retried a 429 eleven times in 80s against a fake backend.
+    stub = await startStubCopilot({
+      respond: () => [
+        { type: 2, item: { messages: [], result: { value: "Throttled", errorCode: "PerUserThrottled", message: "Slow down" } } },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as any).error.code).toBe("m365_throttled");
+  });
+
+  it("reports a model this account cannot use as unavailable, with M365's reason", async () => {
+    stub = await startStubCopilot({
+      respond: () => [
+        {
+          type: 2,
+          item: {
+            messages: [{ author: "bot", text: "This model requires a Premium license.", contentOrigin: "BotConnection" }],
+            result: { value: "InternalError", message: "This model requires a Premium license." },
+          },
+        },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(422);
+    const body: any = await response.json();
+    expect(body.error.code).toBe("m365_unavailable");
+    expect(body.error.message).toMatch(/Premium license/);
+  });
+
   it("reports Disengaged distinctly rather than as a generic error", async () => {
     stub = await startStubCopilot({ respond: () => [disengaged(), completion()] });
     const { url } = await start();

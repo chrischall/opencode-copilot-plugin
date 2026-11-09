@@ -117,6 +117,25 @@ export class TurnRejectedError extends Error {
   }
 }
 
+/** M365 throttled the account. Every retry extends the lull it needs to recover. */
+export class M365ThrottledError extends Error {
+  constructor(detail: string) {
+    super(`M365 is throttling this account (${detail}). It recovers after a lull; retrying now extends it.`);
+    this.name = "M365ThrottledError";
+  }
+}
+
+/**
+ * M365 answered with its own refusal instead of the model: no credits left, a model
+ * this account's licence does not cover, or a tone that is registered but dead.
+ */
+export class M365UnavailableError extends Error {
+  constructor(detail: string) {
+    super(`M365 could not serve this model: ${detail}`);
+    this.name = "M365UnavailableError";
+  }
+}
+
 export interface ThrottleState {
   current: number;
   max: number;
@@ -132,6 +151,9 @@ export interface TurnResult {
   turnCount?: number;
   /** Classifier scores. `dea_violation` rises before Disengaged fires. */
   scores?: Record<string, number>;
+  /** The final item's verdict: `Success`, or why M365 did not serve the turn. */
+  resultValue?: string;
+  errorCode?: string;
 }
 
 export interface CopilotSessionOptions {
@@ -316,6 +338,11 @@ export class CopilotSession {
         // Only a grounded turn carries citation tokens; a coding answer is passed
         // through verbatim so its indentation and tool-call fences are never touched.
         const raw = deltaText.length >= snapshotText.length ? deltaText : snapshotText;
+        const refusal = refusalOf(result, raw);
+        if (refusal) {
+          reject(refusal);
+          return;
+        }
         result.text = turn.grounded ? cleanAnswer(raw) : raw;
         resolve(result);
       };
@@ -528,6 +555,8 @@ export class CopilotSession {
 
   private applyStreamItem(item: any, result: TurnResult): void {
     if (!item) return;
+    if (typeof item.result?.value === "string") result.resultValue = item.result.value;
+    if (typeof item.result?.errorCode === "string") result.errorCode = item.result.errorCode;
     if (item.throttling) {
       result.throttle = {
         current: item.throttling.numUserMessagesInConversation,
@@ -544,6 +573,19 @@ export class CopilotSession {
 interface OutgoingMessage {
   text: string;
   annotations: ImageAnnotation[];
+}
+
+/**
+ * M365's own refusal, when that is what arrived instead of an answer. Its text reads
+ * like a reply, so returned as one it would end opencode's loop on an apology.
+ */
+function refusalOf(result: TurnResult, text: string): Error | undefined {
+  const detail = [result.errorCode, text.trim()].filter(Boolean).join(": ") || result.resultValue || "no reason given";
+  if (result.resultValue === "Throttled") return new M365ThrottledError(detail);
+  if (result.resultValue && result.resultValue !== "Success") return new M365UnavailableError(detail);
+  // A tone that is registered but dead answers with a canned apology from here.
+  if (result.contentOrigin === "BotConnection") return new M365UnavailableError(`registered but dead (BotConnection): ${detail}`);
+  return undefined;
 }
 
 /** Pull the diagnostic fields off a final bot message. */

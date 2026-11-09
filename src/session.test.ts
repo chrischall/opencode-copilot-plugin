@@ -9,7 +9,7 @@ import {
   throttling,
   type StubServer,
 } from "../test/stub-copilot.js";
-import { CopilotSession, DisengagedError, decodeJwt, cleanAnswer } from "./session.js";
+import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, decodeJwt, cleanAnswer } from "./session.js";
 
 /** A token carrying just the claims we read: object id and tenant id. */
 function fakeToken(oid = "aaaa-oid", tid = "bbbb-tid"): string {
@@ -359,6 +359,43 @@ describe("receiving a response", () => {
 });
 
 describe("failure modes", () => {
+  /** A final item carrying M365's own verdict on the turn, the way the service sends it. */
+  const verdict = (value: string, text: string, extra: Record<string, unknown> = {}) => ({
+    type: 2,
+    item: {
+      messages: [{ author: "bot", text, contentOrigin: "BotConnection" }],
+      result: { value, message: text, ...extra },
+    },
+  });
+
+  it("raises a throttle instead of returning M365's apology as the answer", async () => {
+    stub = await startStubCopilot({
+      respond: () => [verdict("Throttled", "You've sent a lot of messages.", { errorCode: "PerUserThrottled" }), completion()],
+    });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(M365ThrottledError);
+    await expect(failure).rejects.toThrow(/PerUserThrottled/);
+  });
+
+  it.each(["OutOfCredits", "ForbiddenRequest", "InternalError"])("raises a %s refusal as unavailable", async (value) => {
+    stub = await startStubCopilot({ respond: () => [verdict(value, "This model requires a Premium license."), completion()] });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+    await expect(failure).rejects.toThrow(/Premium license/);
+  });
+
+  it("raises a registered-but-dead route's canned reply as unavailable", async () => {
+    stub = await startStubCopilot({
+      respond: () => [streamItem("Sorry, I can't help with that here.", { contentOrigin: "BotConnection" }), completion()],
+    });
+    await expect(sessionFor(stub).run("hi")).rejects.toBeInstanceOf(M365UnavailableError);
+  });
+
+  it("still answers a successful turn", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("ok", { contentOrigin: "DeepLeo" }), completion()] });
+    expect((await sessionFor(stub).run("hi")).text).toBe("ok");
+  });
+
   it("throws a distinct error on Disengaged, which is NOT rate limiting", async () => {
     // Empty content makes this look like throttling; retrying just disengages again
     // and burns the 600-message conversation quota.
