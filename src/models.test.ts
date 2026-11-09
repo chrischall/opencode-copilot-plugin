@@ -84,13 +84,15 @@ describe("model picker names", () => {
 
   it("marks every grounded model as Work and every other model as Code", () => {
     for (const model of withReach) {
-      expect(model.name, model.id).toMatch(model.grounded ? /^Work · / : /^Code · /);
+      expect(model.name, `model ${model.id} has the wrong purpose prefix`).toMatch(
+        model.grounded ? /^Work · / : /^Code · /,
+      );
     }
   });
 
   it("says what a Work model reads", () => {
     for (const model of withReach.filter((candidate) => candidate.grounded)) {
-      expect(model.name, model.id).toMatch(/mail, Teams & files/);
+      expect(model.name, `model ${model.id} does not say what it reads`).toMatch(/mail, Teams & files/);
     }
   });
 
