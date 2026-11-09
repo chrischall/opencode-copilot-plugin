@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.2.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.1.2...v2.2.0) (2026-11-09)
+
+
+### Features
+
+* **models:** work on live M365 tenants, default to quick, add doctor --live ([63ae0cf](https://github.com/chrischall/opencode-copilot-plugin/commit/63ae0cf5d0df8a883dac36300d6919e61830ca32))
+
+
+### Bug Fixes
+
+* **server:** return HTTP 422 instead of 502 for a rejected or disengaged turn, so opencode no longer retries it. Clients matching 502 (or `upstream_error`) for these must now match 422 with `m365_turn_rejected` or `m365_disengaged` ([63ae0cf](https://github.com/chrischall/opencode-copilot-plugin/commit/63ae0cf5d0df8a883dac36300d6919e61830ca32))
+* **tools:** accept the tool-call shapes M365 writes and surface its refusals ([#100](https://github.com/chrischall/opencode-copilot-plugin/issues/100)) ([e8ac82a](https://github.com/chrischall/opencode-copilot-plugin/commit/e8ac82aff795e118ff8540e80a2886eadf7a7962))
+* **tools:** keep opencode 2's shell tool in the lean toolset ([#99](https://github.com/chrischall/opencode-copilot-plugin/issues/99)) ([6ff3ba4](https://github.com/chrischall/opencode-copilot-plugin/commit/6ff3ba4d69feedd2422bf3e39eb1879251e60e8e))
+* **tools:** stop contradicting opencode's tools, nudge give-ups, and pin the backend ([#101](https://github.com/chrischall/opencode-copilot-plugin/issues/101)) ([e7057f5](https://github.com/chrischall/opencode-copilot-plugin/commit/e7057f5b4cf77427798e904aa71f0d56e695e39a))
+
 ## [2.1.2](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.1.1...v2.1.2) (2026-11-09)
 
 
