@@ -77,3 +77,24 @@ describe("model catalog", () => {
     expect(listModelIds()).toContain(DEFAULT_MODEL);
   });
 });
+
+describe("model picker names", () => {
+  // opencode 2's Model.Info has no description, so `name` is all the picker shows.
+  const withReach = MODELS.filter((model) => model.tone !== null);
+
+  it("marks every grounded model as Work and every other model as Code", () => {
+    for (const model of withReach) {
+      expect(model.name, model.id).toMatch(model.grounded ? /^Work · / : /^Code · /);
+    }
+  });
+
+  it("says what a Work model reads", () => {
+    for (const model of withReach.filter((candidate) => candidate.grounded)) {
+      expect(model.name, model.id).toMatch(/mail, Teams & files/);
+    }
+  });
+
+  it("does not badge the local titler, which is neither", () => {
+    expect(resolveModel(LOCAL_TITLE_MODEL).name).not.toMatch(/^(Work|Code) · /);
+  });
+});

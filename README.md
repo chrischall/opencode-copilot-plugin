@@ -217,7 +217,8 @@ What `WorkSearch` reaches (all verified against a live tenant, except where note
 | Third-party **Graph connectors** (Jira, ServiceNow, …) | ✅ *if your admin configured them* |
 
 Select one in opencode (the model picker, or pin a `work` sub-agent to it) when you want
-this context; every other model stays coding/web-only and never reaches your account. A
+this context; they are listed as `Work · …`. Every other model is listed as `Code · …`,
+stays coding/web-only and never reaches your account. A
 grounded turn switches the request to the Outlook side-pane scenario, sends that surface's
 feature variants, and attaches the built-in agent with the `WorkSearch` capability — the
 combination that actually grounds on the signed-in account — then strips Copilot's inline
