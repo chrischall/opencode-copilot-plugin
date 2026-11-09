@@ -195,6 +195,22 @@ A non-default tone (Claude, the reasoning tones) only takes effect when **no** a
 attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
 the agent only on turns that carry tools, so plain chat reaches the model the tone selects.
 
+### Reading your mailbox
+
+Two models ground the turn on your **own mailbox** — Copilot searches your mail, calendar
+and files server-side and answers from them:
+
+| Model | Use |
+|---|---|
+| `m365/work` | Ask about your mail ("what needs my attention first", "summarise the thread with X") |
+| `m365/work-think` | The same, on a reasoning tone |
+
+Select one in opencode (model picker, or pin a `mail` sub-agent to it) when you want
+mailbox context; every other model stays coding/web-only and never reaches your mailbox.
+These switch the request to the Outlook side-pane scenario and attach the built-in
+`WorkSearch` agent — the surface that actually grounds on the signed-in account — and strip
+Copilot's inline citation markers from the reply. Verified against a live tenant.
+
 ## Authentication
 
 Sign-in is a CLI concern, never the plugin's: the plugin only refreshes silently and asks
