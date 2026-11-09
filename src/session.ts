@@ -158,13 +158,19 @@ export interface TurnOptions {
 }
 
 /**
- * Strip Copilot's inline citation control tokens from an answer.
+ * Strip Copilot's inline citation control tokens from a GROUNDED answer.
  *
  * The web UI renders these as citation chips; over the wire they arrive as
  * literal noise: private-use-area delimiters (U+E000–U+F8FF) wrapping
  * `cite…turn1search23…` runs, plus `【2-9c5ade】`-style attribution markers.
- * Grounded (mailbox/web) answers carry them; a plain coding answer has none, so
- * this is a no-op there. Measured against live answers 2026-11-09.
+ * Only the side-pane (grounded) surface emits them, which is why the caller runs
+ * this on grounded turns only — a coding answer is passed through untouched, so
+ * its indentation is never altered.
+ *
+ * Even here the whitespace tidy is indentation-safe: it collapses only runs that
+ * FOLLOW a non-space character (the double spaces a removed token leaves mid
+ * line), never leading indentation — a grounded answer can still contain a code
+ * block. Measured against live answers 2026-11-09.
  */
 export function cleanAnswer(text: string): string {
   return text
@@ -172,7 +178,7 @@ export function cleanAnswer(text: string): string {
     .replace(/cite(?:turn\d+[a-z]+\d+)+/gi, "")
     .replace(/【[^】]{1,60}】/g, "")
     .replace(/[ \t]+\n/g, "\n")
-    .replace(/[ \t]{2,}/g, " ")
+    .replace(/(\S)[ \t]{2,}/g, "$1 ")
     .trim();
 }
 
@@ -299,7 +305,10 @@ export class CopilotSession {
         }
         // The server sends the answer twice — incrementally and as a snapshot — and
         // either can be the more complete one depending on where the turn ended.
-        result.text = cleanAnswer(deltaText.length >= snapshotText.length ? deltaText : snapshotText);
+        // Only a grounded turn carries citation tokens; a coding answer is passed
+        // through verbatim so its indentation and tool-call fences are never touched.
+        const raw = deltaText.length >= snapshotText.length ? deltaText : snapshotText;
+        result.text = turn.grounded ? cleanAnswer(raw) : raw;
         resolve(result);
       };
 

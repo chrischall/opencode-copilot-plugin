@@ -195,21 +195,40 @@ A non-default tone (Claude, the reasoning tones) only takes effect when **no** a
 attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
 the agent only on turns that carry tools, so plain chat reaches the model the tone selects.
 
-### Reading your mailbox
+### Reading your Microsoft 365 work
 
-Two models ground the turn on your **own mailbox** — Copilot searches your mail, calendar
-and files server-side and answers from them:
+Two models ground the turn on your **own Microsoft 365 account**. Copilot's `WorkSearch`
+runs server-side over the Microsoft Search index, so these span your whole work substrate,
+not just mail:
 
 | Model | Use |
 |---|---|
-| `m365/work` | Ask about your mail ("what needs my attention first", "summarise the thread with X") |
+| `m365/work` | Ask about your work — "what needs my attention first", "summarise the thread with X", "what did Jim message me on Teams", "find my recent sprint docs" |
 | `m365/work-think` | The same, on a reasoning tone |
 
-Select one in opencode (model picker, or pin a `mail` sub-agent to it) when you want
-mailbox context; every other model stays coding/web-only and never reaches your mailbox.
-These switch the request to the Outlook side-pane scenario and attach the built-in
-`WorkSearch` agent — the surface that actually grounds on the signed-in account — and strip
-Copilot's inline citation markers from the reply. Verified against a live tenant.
+What `WorkSearch` reaches (all verified against a live tenant, except where noted):
+
+| Source | Grounded? |
+|---|---|
+| Outlook **mail** and **calendar** | ✅ |
+| **Teams** chats and channel messages | ✅ |
+| **OneDrive** and **SharePoint** files | ✅ |
+| **People** (colleagues, senders, managers) | ✅ |
+| Third-party **Graph connectors** (Jira, ServiceNow, …) | ✅ *if your admin configured them* |
+
+Select one in opencode (the model picker, or pin a `work` sub-agent to it) when you want
+this context; every other model stays coding/web-only and never reaches your account. A
+grounded turn switches the request to the Outlook side-pane scenario, sends that surface's
+feature variants, and attaches the built-in agent with the `WorkSearch` capability — the
+combination that actually grounds on the signed-in account — then strips Copilot's inline
+citation markers from the reply. Bias toward one source by saying so ("in Teams, …", "in my
+OneDrive, …").
+
+These models are for **reading and synthesis** — ask-your-work Q&A. They answer from your
+data but don't take tool calls: a grounded turn brings Copilot's own agent, so opencode's
+fenced tool instructions are not attached. Keep a coding model selected for coding, and
+switch to `m365/work` to ask about your mail, Teams or files. Read-only: Copilot searches
+and summarises, it does not send a message or edit a file.
 
 ## Authentication
 

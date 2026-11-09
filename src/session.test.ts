@@ -205,11 +205,26 @@ describe("cleanAnswer", () => {
     expect(cleanAnswer("const x = 1; // fine")).toBe("const x = 1; // fine");
   });
 
+  it("preserves code indentation while stripping tokens (grounded answers can hold code)", () => {
+    const raw = "Here is the snippet: citeturn1search2\n\n    def f():\n        return 1\u30101-x\u3011";
+    const clean = cleanAnswer(raw);
+    expect(clean).toContain("\n    def f():");
+    expect(clean).toContain("\n        return 1");
+    expect(clean).not.toMatch(/cite|【/);
+  });
+
   it("cleans citation tokens out of a streamed answer", async () => {
     stub = await startStubCopilot({
       respond: () => [delta("Reviewed. citeturn1search3 "), delta("All good."), completion()],
     });
     expect((await sessionFor(stub).run("hi", { grounded: true })).text).toBe("Reviewed. All good.");
+  });
+
+  it("does NOT run on an ungrounded turn, so coding indentation survives verbatim", async () => {
+    // The regression the review caught: cleanAnswer must not touch a coding turn.
+    stub = await startStubCopilot({ respond: () => [delta("def f():\n    if x:\n        return  1"), completion()] });
+    const result = await sessionFor(stub).run("write a function"); // grounded defaults false
+    expect(result.text).toBe("def f():\n    if x:\n        return  1");
   });
 });
 
