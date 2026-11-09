@@ -101,6 +101,16 @@ describe("selecting the toolset the model actually sees", () => {
     expect(names(selectLeanTools(unknown))).toContain("run_command");
   });
 
+  it("keeps opencode 2's shell tool, which is named shell, not bash", () => {
+    // Captured from opencode 2.2.5 on 2026-11-09. Recognising read/edit/write/grep
+    // while missing the rename dropped the shell, and every command came back as
+    // "no shell execution tool is available".
+    const opencode2 = ["edit", "experimental_image_generate", "glob", "grep", "question", "read", "shell",
+      "skill", "subagent", "webfetch", "websearch", "write", "execute"].map((name) => tool(name));
+    expect(names(selectLeanTools(opencode2))).toEqual(["edit", "grep", "read", "shell", "write"]);
+    expect(describeToolSelection(opencode2)).toBeUndefined();
+  });
+
   it("returns an empty toolset unchanged", () => {
     expect(selectLeanTools([])).toEqual([]);
   });

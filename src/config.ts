@@ -43,7 +43,7 @@ export const DISENGAGE_TOOL_BUDGET = 12;
  *
  * The rest is the minimum needed to read and change code.
  */
-export const LEAN_TOOLS = ["bash", "read", "edit", "write", "apply_patch", "grep"] as const;
+export const LEAN_TOOLS = ["bash", "shell", "read", "edit", "write", "apply_patch", "grep"] as const;
 
 /**
  * How many tools to keep when we recognise none of the harness's names.
@@ -65,7 +65,9 @@ export const LEAN_FALLBACK_LIMIT = 5;
  * final request whatever the harness does, so the trim lives here.
  *
  * Two rules, in order:
- *   1. Keep the tools we recognise as load-bearing for a coding loop.
+ *   1. Keep the tools we recognise as load-bearing for a coding loop, plus the shell
+ *      tool under whatever name the harness gives it — opencode 2 renamed `bash` to
+ *      `shell`, and an allowlist alone silently dropped it.
  *   2. If we recognise none of them — a harness with its own vocabulary — fall back
  *      to a hard cap, keeping any shell tool first.
  */
@@ -73,12 +75,12 @@ export function selectLeanTools(tools: readonly ToolDef[]): ToolDef[] {
   if (tools.length === 0) return [...tools];
 
   const wanted = new Set<string>(LEAN_TOOLS);
-  const kept = tools.filter((tool) => wanted.has(tool.function.name.toLowerCase()));
-  if (kept.length > 0) return kept;
+  const shell = findShellTool(tools);
+  const kept = tools.filter((tool) => tool === shell || wanted.has(tool.function.name.toLowerCase()));
+  if (kept.some((tool) => tool !== shell)) return kept;
 
   // Unknown vocabulary. Keep the shell tool if we can spot one, then fill up to the
   // cap in the order the harness offered them.
-  const shell = findShellTool(tools);
   const rest = tools.filter((tool) => tool !== shell);
   const remaining = shell ? LEAN_FALLBACK_LIMIT - 1 : LEAN_FALLBACK_LIMIT;
   return [...(shell ? [shell] : []), ...rest.slice(0, remaining)];
