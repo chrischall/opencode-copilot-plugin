@@ -165,6 +165,24 @@ hands it to opencode itself. Only a standalone `opencode-m365 serve` proxy needs
 `serve` prints its key, or takes a fixed one from `M365_PROXY_KEY`. Either put that key
 in `apiKey`, or export the same `M365_PROXY_KEY` to opencode and leave `apiKey` out.
 
+### Errors and the turn log
+
+When M365 refuses a turn, the proxy answers with an HTTP 422 so opencode does not
+retry it: opencode retries a 5xx or a 429 several times, which against a throttle only
+extends it. The error `code` says which refusal it was:
+
+| Code | Meaning |
+|---|---|
+| `m365_throttled` | The account is throttled. Wait for a lull. |
+| `m365_unavailable` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone |
+| `m365_turn_rejected` | The server refused the request outright, typically a retired tone |
+| `m365_disengaged` | M365's filter refused to engage with the prompt |
+
+Set `M365_TURN_LOG=/path/to/turns.jsonl` before starting opencode to record one line
+per M365 turn: the raw reply, the tool calls parsed from it, and M365's diagnostics
+(`contentOrigin`, `turnCount`, throttle and classifier scores). The file is
+owner-only, and off by default because a reply can quote anything from the workspace.
+
 ### Why session titles are answered locally
 
 opencode titles every new session with a model call on your main model, which on M365

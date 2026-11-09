@@ -391,23 +391,33 @@ export function parseToolCalls(
   tools: readonly ToolDef[],
   options: ParseOptions = {},
 ): ParseResult {
-  const cleaned = stripInventedJson(source);
+  const cleaned = stripInventedJson(source.replace(/\r\n?/g, "\n"));
 
   if (tools.length === 0) return { toolCalls: [], text: cleaned };
-  if (isProseDocument(cleaned)) return { toolCalls: [], text: cleaned };
 
   const shell = findShellTool(tools);
   const byName = new Map(tools.map((tool) => [tool.function.name.toLowerCase(), tool]));
+  const toolFor = (fence: Fence): ToolDef | undefined => {
+    const info = fence.info.split(/\s+/)[0]?.toLowerCase() ?? "";
+    // Shell-routing: a plain ```bash block is the model doing the work in the one
+    // way its server-side prompt permits.
+    return byName.get(info) ?? (shell && SHELL_FENCE_INFOS.has(info) ? shell : undefined);
+  };
+
+  // Everything from a tool result the model wrote for itself onward is invented.
+  const invented = cleaned.search(/<tool_(?:response|result)\b/i);
+  const actionable = invented === -1 ? cleaned : cleaned.slice(0, invented);
+  const fences = extractFences(actionable);
+
+  // A reply that opens with a tool block is an action, whatever prose follows it.
+  const opensWithAction = fences.length > 0 && actionable.slice(0, fences[0]!.start).trim() === "" && Boolean(toolFor(fences[0]!));
+  if (!opensWithAction && isProseDocument(actionable)) return { toolCalls: [], text: cleaned };
 
   const calls: ParsedToolCall[] = [];
   const consumed: Fence[] = [];
 
-  for (const fence of extractFences(cleaned)) {
-    const info = fence.info.split(/\s+/)[0]?.toLowerCase() ?? "";
-    let tool = byName.get(info);
-    // Shell-routing: a plain ```bash block is the model doing the work in the one
-    // way its server-side prompt permits.
-    if (!tool && shell && SHELL_FENCE_INFOS.has(info)) tool = shell;
+  for (const fence of fences) {
+    const tool = toolFor(fence);
     if (!tool) continue;
 
     calls.push({ name: tool.function.name, arguments: parseFenceBody(fence.body, tool) });
@@ -422,41 +432,105 @@ export function parseToolCalls(
   return { toolCalls: calls, text: "" };
 }
 
+/** Names models use for a file path, compared without case or underscores. */
+const PATH_ALIASES = new Set(["path", "filepath", "file", "filename"]);
+
+const squash = (name: string) => name.toLowerCase().replace(/_/g, "");
+
+/** The parameter a header key means, tolerating case, snake_case and path aliases. */
+function resolveKey(key: string, candidates: readonly string[]): string | undefined {
+  const wanted = squash(key);
+  const exact = candidates.find((name) => squash(name) === wanted);
+  if (exact) return exact;
+  if (!PATH_ALIASES.has(wanted)) return undefined;
+  return candidates.find((name) => PATH_ALIASES.has(squash(name)));
+}
+
+/**
+ * Clean a header value the way models write it: wrapped in quotes or backticks, with
+ * the template's `(optional)` marker echoed. An echoed `<type>` placeholder is no value.
+ */
+function cleanValue(raw: string): string | undefined {
+  let value = raw.replace(/\s*\(optional\)\s*$/i, "").trim();
+  const wrapped = /^(["'`])(.*)\1$/.exec(value);
+  if (wrapped) value = wrapped[2]!;
+  return /^<[A-Za-z]+>$/.test(value) ? undefined : value;
+}
+
 /** Split a fence body into header args, a SEARCH/REPLACE pair, and/or a body arg. */
 function parseFenceBody(body: string, tool: ToolDef): Record<string, any> {
   const shape = shapeOf(tool);
   const props = tool.function.parameters?.properties ?? {};
+  const isShell = SHELL_TOOL_NAMES.includes(tool.function.name.toLowerCase());
   const args: Record<string, any> = {};
+  const seen = new Set<string>();
+  // The body parameter or an edit half, written as a header line instead of where the
+  // template puts it. Kept with its raw line in case it turns out to be content.
+  let bodyHeader: { value: string; line: string } | undefined;
+  const editHeaders: Record<string, string> = {};
 
   const lines = body.split("\n");
   let cursor = 0;
 
   // Header lines run until the first line that is not `knownParam: value`. Requiring
   // the key to be a declared parameter is what stops `echo 'note: hi'` from being
-  // eaten as a header.
+  // eaten as a header. Each key is taken once, so a file whose first line repeats a
+  // key (`path: /usr/bin`) stays content instead of redirecting the call.
+  const headerish = [...shape.headers, ...(shape.bodyParam ? [shape.bodyParam] : []), ...(shape.editPair ?? [])];
   while (cursor < lines.length) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s?(.*)$/.exec(lines[cursor]!);
     if (!match) break;
-    const key = match[1]!;
-    if (!shape.headers.includes(key)) break;
-    args[key] = coerce(match[2]!.trim(), props[key]?.type);
+    const key = resolveKey(match[1]!, headerish);
+    if (!key || seen.has(key)) break;
+    seen.add(key);
+
+    if (key === shape.bodyParam) {
+      bodyHeader = { value: match[2]!.trim(), line: lines[cursor]! };
+    } else if (shape.editPair?.includes(key)) {
+      editHeaders[key] = match[2]!;
+    } else {
+      const value = cleanValue(match[2]!);
+      if (value !== undefined) args[key] = coerce(value, props[key]?.type);
+    }
     cursor += 1;
   }
 
-  const rest = lines.slice(cursor).join("\n").replace(/^\n+/, "");
+  const rest = lines.slice(cursor).join("\n").replace(/^\n+/, "").trimEnd();
 
   if (shape.editPair) {
+    const [search, replace] = shape.editPair;
     const diff = parseSearchReplace(rest);
     if (diff) {
-      args[shape.editPair[0]] = diff.search;
-      args[shape.editPair[1]] = diff.replace;
+      args[search] = diff.search;
+      args[replace] = diff.replace;
+    } else if (search in editHeaders && replace in editHeaders) {
+      args[search] = editHeaders[search];
+      args[replace] = editHeaders[replace];
     }
     return args;
   }
 
   if (shape.bodyParam) {
-    const trimmed = rest.trim();
-    if (trimmed !== "") args[shape.bodyParam] = trimmed;
+    let value = rest;
+    if (bodyHeader) {
+      // A shell command continues past its `command:` line; for anything else a
+      // one-line header is the whole value, and a longer body means the line was content.
+      if (isShell) value = [bodyHeader.value, rest].filter((part) => part !== "").join("\n");
+      else value = rest === "" ? bodyHeader.value : `${bodyHeader.line}\n${rest}`;
+    }
+    if (isShell && value.split("\n").every((line) => line.trim() === "" || line.startsWith("$ "))) {
+      value = value.replace(/^\$ /gm, "");
+    }
+    if (value.trim() !== "") args[shape.bodyParam] = value;
+    return args;
+  }
+
+  // No body parameter: a lone bare line is the one required argument still missing.
+  const required = tool.function.parameters?.required ?? [];
+  const missing = shape.headers.filter((name) => required.includes(name) && !(name in args));
+  if (missing.length === 1 && rest !== "" && !rest.includes("\n")) {
+    const value = cleanValue(rest);
+    if (value !== undefined) args[missing[0]!] = coerce(value, props[missing[0]!]?.type);
   }
 
   return args;

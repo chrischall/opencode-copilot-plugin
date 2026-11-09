@@ -17,7 +17,8 @@ import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel } from "./models.js";
 import { describeToolSelection, selectLeanTools } from "./config.js";
-import { CopilotSession, DisengagedError, TurnRejectedError } from "./session.js";
+import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, TurnRejectedError, type TurnResult } from "./session.js";
+import { createPrivateAppender } from "./private-fs.js";
 import {
   ChatCompletionRequest,
   ConversationPool,
@@ -85,6 +86,12 @@ export interface ServerDeps {
    * does not affect the outgoing request — see `condenseSystemPrompt`.
    */
   leanSystemPrompt?: string;
+  /**
+   * Receives one entry per M365 turn: the raw reply, what was parsed from it, and
+   * M365's diagnostics. Defaults to a JSONL file at `M365_TURN_LOG` when that is set,
+   * and to nothing otherwise — the raw reply can hold anything from the workspace.
+   */
+  turnLog?: (entry: TurnLogEntry) => void;
   port?: number;
   /** Loopback only: `127.0.0.1` (the default), `::1` or `localhost`. Anything else throws. */
   host?: string;
@@ -351,6 +358,34 @@ async function handleChatCompletion(
   }
 }
 
+export interface TurnLogEntry {
+  time: string;
+  model: string;
+  tone: string | null;
+  agent: boolean;
+  tools: string[];
+  reply?: string;
+  toolCalls?: string[];
+  contentOrigin?: string;
+  turnCount?: number;
+  throttle?: TurnResult["throttle"];
+  scores?: Record<string, number>;
+  resultValue?: string;
+  error?: string;
+}
+
+let envTurnLog: ((entry: TurnLogEntry) => void) | null | undefined;
+
+/** The `M365_TURN_LOG` file writer, created on first use. */
+function defaultTurnLog(): ((entry: TurnLogEntry) => void) | null {
+  if (envTurnLog === undefined) {
+    const file = process.env.M365_TURN_LOG;
+    const append = file ? createPrivateAppender(file) : null;
+    envTurnLog = append ? (entry) => append(`${JSON.stringify(entry)}\n`) : null;
+  }
+  return envTurnLog;
+}
+
 async function runTurn(
   request: IncomingMessage,
   response: ServerResponse,
@@ -400,6 +435,17 @@ async function runTurn(
 
   if (streaming) startSse(response);
 
+  const turnLog = context.deps.turnLog ?? defaultTurnLog();
+  const logTurn = (fields: Partial<TurnLogEntry>) =>
+    turnLog?.({
+      time: new Date().toISOString(),
+      model: model.id,
+      tone: model.tone,
+      agent: Boolean(agent),
+      tools: effectiveTools.map((tool) => tool.function.name),
+      ...fields,
+    });
+
   try {
     const result = await conversation.session.run(prompt, {
       ...(model.tone ? { tone: model.tone } : {}),
@@ -416,6 +462,16 @@ async function runTurn(
     // has that turn, and sending it back would paste its own answer in as user input.
     conversation.sentMessageCount = body.messages.length + 1;
 
+    logTurn({
+      reply: result.text,
+      toolCalls: parseToolCalls(result.text, effectiveTools).toolCalls.map((call) => call.name),
+      ...(result.contentOrigin ? { contentOrigin: result.contentOrigin } : {}),
+      ...(result.turnCount !== undefined ? { turnCount: result.turnCount } : {}),
+      ...(result.throttle ? { throttle: result.throttle } : {}),
+      ...(result.scores ? { scores: result.scores } : {}),
+      ...(result.resultValue ? { resultValue: result.resultValue } : {}),
+    });
+
     if (!streaming) {
       sendJson(response, 200, buildCompletion(result, { model: model.id, tools: effectiveTools, allowMultiple: context.deps.allowMultiTool ?? false }));
       return;
@@ -423,6 +479,7 @@ async function runTurn(
 
     finishStream(response, streamId, model.id, result, effectiveTools, canStreamText, context.deps.allowMultiTool ?? false);
   } catch (error) {
+    logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
     handleTurnFailure(response, error, streaming, effectiveTools.length);
   }
 }
@@ -470,6 +527,16 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
         ? ` The request carried ${toolCount} tools; M365 disengages persistently above roughly 12. Reduce the toolset — see the lean profile in the opencode plugin.`
         : " M365 refused to engage with this prompt. Retrying will not help; reduce the toolset or simplify the prompt.";
     finishWithError(response, streaming, NON_RETRYABLE, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
+    return;
+  }
+
+  if (error instanceof M365ThrottledError) {
+    finishWithError(response, streaming, NON_RETRYABLE, "m365_throttled", error.message);
+    return;
+  }
+
+  if (error instanceof M365UnavailableError) {
+    finishWithError(response, streaming, NON_RETRYABLE, "m365_unavailable", error.message);
     return;
   }
 
