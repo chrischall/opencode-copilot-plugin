@@ -224,11 +224,12 @@ combination that actually grounds on the signed-in account — then strips Copil
 citation markers from the reply. Bias toward one source by saying so ("in Teams, …", "in my
 OneDrive, …").
 
-These models are for **reading and synthesis** — ask-your-work Q&A. They answer from your
-data but don't take tool calls: a grounded turn brings Copilot's own agent, so opencode's
-fenced tool instructions are not attached. Keep a coding model selected for coding, and
-switch to `m365/work` to ask about your mail, Teams or files. Read-only: Copilot searches
-and summarises, it does not send a message or edit a file.
+These models are for **reading and synthesis** — ask-your-work Q&A. A grounded turn carries
+**no tools**: the proxy drops opencode's toolset for these models, so the fenced tool
+instructions are never attached and no tool-call parsing runs on the reply — Copilot brings
+its own built-in agent instead. Keep a coding model selected for coding, and switch to
+`m365/work` to ask about your mail, Teams or files. Read-only: Copilot searches and
+summarises, it does not send a message or edit a file.
 
 ## Authentication
 
