@@ -67,8 +67,8 @@ export const MODELS: readonly ModelInfo[] = [
   // Mailbox-grounded models: select these in opencode (as `m365/work` /
   // `m365/work-think`) to ask about your own mail, calendar and files — Copilot
   // searches them server-side. The other models stay coding/web-only.
-  m("work", "M365 Copilot (Work — reads your mailbox)", "magic", false, true),
-  m("work-think", "M365 Copilot (Work, Think Deeper)", "Gpt_5_5_Reasoning", true, true),
+  m("work", "Ask your mail, Teams & files", "magic", false, true),
+  m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
@@ -93,7 +93,24 @@ export const MODELS: readonly ModelInfo[] = [
 ];
 
 function m(id: string, name: string, tone: string | null, reasoning: boolean, grounded = false): ModelInfo {
-  return { id, name, tone, reasoning, grounded, limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS } };
+  return {
+    id,
+    name: pickerName(name, tone, grounded),
+    tone,
+    reasoning,
+    grounded,
+    limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS },
+  };
+}
+
+/**
+ * Lead with what the model is for. opencode 2's `Model.Info` has no description, so
+ * the name is the only thing that separates reading your account from writing code.
+ * The local titler is neither.
+ */
+function pickerName(name: string, tone: string | null, grounded: boolean): string {
+  if (tone === null) return name;
+  return `${grounded ? "Work" : "Code"} · ${name}`;
 }
 
 const BY_ID = new Map(MODELS.map((model) => [model.id, model]));
