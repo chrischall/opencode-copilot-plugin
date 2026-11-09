@@ -119,9 +119,18 @@ const REPLACE_MARKER = ">>>>>>> REPLACE";
 
 // --- toolset inspection ---------------------------------------------------------
 
-/** The shell tool in this toolset, whatever the harness named it. */
+/**
+ * The shell tool in this toolset, whatever the harness named it.
+ *
+ * Chosen by name priority, not the harness's order: opencode 2 offers both `shell`
+ * and `execute`, and its `execute` runs JavaScript.
+ */
 export function findShellTool(tools: readonly ToolDef[]): ToolDef | undefined {
-  return tools.find((tool) => SHELL_TOOL_NAMES.includes(tool.function.name.toLowerCase()));
+  for (const name of SHELL_TOOL_NAMES) {
+    const match = tools.find((tool) => tool.function.name.toLowerCase() === name);
+    if (match) return match;
+  }
+  return undefined;
 }
 
 interface ToolShape {

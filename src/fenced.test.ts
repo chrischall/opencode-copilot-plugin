@@ -67,6 +67,12 @@ describe("shell tool detection", () => {
     }
   });
 
+  it("prefers a real shell over a code runner listed before it", () => {
+    // opencode 2's `execute` runs JavaScript, not commands.
+    const tools = ["execute", "shell"].map((name) => ({ ...bashTool, function: { ...bashTool.function, name } }));
+    expect(findShellTool(tools)?.function.name).toBe("shell");
+  });
+
   it("returns undefined when the toolset has no shell", () => {
     expect(findShellTool([readTool])).toBeUndefined();
   });
