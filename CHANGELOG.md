@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.2](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.1.1...v2.1.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* **models:** label models by purpose in the picker ([#92](https://github.com/chrischall/opencode-copilot-plugin/issues/92)) ([34748a5](https://github.com/chrischall/opencode-copilot-plugin/commit/34748a5ff76f56904189ab98b697e41c294cec48))
+
 ## [2.1.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.1.0...v2.1.1) (2026-11-09)
 
 
