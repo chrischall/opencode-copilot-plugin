@@ -55,13 +55,12 @@ export const LOCAL_TITLE_MODEL = "local-title";
 /**
  * Default when a request carries no model.
  *
- * Their README measures `gpt-5.5-think-deeper` at 100% tool compliance with the
- * declarative agent + fenced/shell-routing path, and a request with no model already
- * defaults to it there. Note this conflicts with `m365-copilot-api.md` quirk #13,
- * which says reasoning tones meta-analyse the injected prompt and disengage — that
- * note predates the GPT-5.5 measurements. See README for the full story.
+ * A chat tone, because a coding backend has to call tools. Measured on a live tenant
+ * (2026-11-09): `quick` made real tool calls 4/4, while `gpt-5.5-think-deeper` claimed
+ * to have no tools 3/3 — matching `m365-copilot-api.md` quirk #13, and contradicting
+ * the 100% that project's README reports for it.
  */
-export const DEFAULT_MODEL = "gpt-5.5-think-deeper";
+export const DEFAULT_MODEL = "quick";
 
 export const MODELS: readonly ModelInfo[] = [
   // Mailbox-grounded models: select these in opencode (as `m365/work` /
@@ -69,25 +68,27 @@ export const MODELS: readonly ModelInfo[] = [
   // searches them server-side. The other models stay coding/web-only.
   m("work", "Ask your mail, Teams & files", "magic", false, true),
   m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
+  m("gpt-5.6", "GPT-5.6", "Gpt_5_6_Chat", false),
+  m("gpt-5.6-quick", "GPT-5.6 (Quick)", "Gpt_5_6_Chat", false),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
   m("gpt-5.5-quick", "GPT-5.5 (Quick)", "Gpt_5_5_Chat", false),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
   m("auto", "M365 Copilot (Auto)", "magic", false),
-  m("quick", "GPT (Quick)", "Gpt_Quick", false),
-  m("think-deeper", "GPT (Think Deeper)", "Gpt_Reasoning", true),
+  m("quick", "GPT (Quick)", "Gpt_5_5_Chat", false),
+  m("think-deeper", "GPT (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),
   m("gpt-5.4", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
   m("gpt-5.4-think-deeper", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
-  m("gpt-5.4-quick", "GPT-5.4 (Quick)", "Gpt_5_4_Quick", false),
-  m("gpt-5.3", "GPT-5.3 (Quick)", "Gpt_5_3_Quick", false),
-  m("gpt-5.3-quick", "GPT-5.3 (Quick)", "Gpt_5_3_Quick", false),
+  m("gpt-5.4-quick", "GPT-5.4 (Quick)", "Gpt_5_4_Chat", false),
+  m("gpt-5.3", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
+  m("gpt-5.3-quick", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
   m("gpt-5.3-think-deeper", "GPT-5.3 (Think Deeper)", "Gpt_5_3_Reasoning", true),
-  m("gpt-5.2", "GPT-5.2 (Quick)", "Gpt_5_2_Quick", false),
-  m("gpt-5.2-quick", "GPT-5.2 (Quick)", "Gpt_5_2_Quick", false),
+  m("gpt-5.2", "GPT-5.2 (Quick)", "Gpt_5_2_Chat", false),
+  m("gpt-5.2-quick", "GPT-5.2 (Quick)", "Gpt_5_2_Chat", false),
   m("gpt-5.2-think-deeper", "GPT-5.2 (Think Deeper)", "Gpt_5_2_Reasoning", true),
   m(LOCAL_TITLE_MODEL, "Local titler (no M365 call)", null, false),
 ];

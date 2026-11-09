@@ -6,7 +6,7 @@ import {
   agentInstructions,
   agentNameFor,
   buildAgentId,
-  environmentHostCandidates,
+  environmentHost,
   getOrCreateAgent,
   resolveEnvironmentHost,
 } from "./agent.js";
@@ -39,6 +39,16 @@ function deps(overrides: Record<string, any> = {}) {
 }
 
 const BAP_ROUTE: [string, any] = ["api.bap.microsoft.com", () => ({ name: `Default-${TENANT}` })];
+
+/** The Copilot Studio surface as the live service shapes it. */
+function studioRoutes(existing: object[], created: { botId?: string; titleId: string }): Array<[string, any]> {
+  return [
+    BAP_ROUTE,
+    ["/publish?", () => ({ TitleId: created.titleId })],
+    ["/copilotstudio/minimalBots/api?", (_url: string, init: any) =>
+      init?.method === "POST" ? { bot: { schemaName: created.botId } } : existing],
+  ];
+}
 
 describe("agent instructions", () => {
   it("describe the fenced format the parser expects", () => {
@@ -78,24 +88,26 @@ describe("agent naming", () => {
 
 describe("agent id", () => {
   it("assembles the id M365 expects on the chat frame", () => {
-    expect(buildAgentId("title9", "bot7")).toBe("T_title9.bot7.gpt.default");
+    expect(buildAgentId("T_title9", "bot7")).toBe("T_title9.bot7.gpt.default");
   });
 });
 
 describe("environment host discovery", () => {
-  it("tries the full label and the label with the last two characters trimmed", () => {
-    // The full-length label frequently fails to resolve; the trimmed one is what
-    // actually works.
-    const candidates = environmentHostCandidates(ENV_ID);
-    expect(candidates[0]).toContain(`default${ENV_ID}.`);
-    expect(candidates.some((host) => host.includes(`default${ENV_ID.slice(0, -2)}.`))).toBe(true);
+  it("splits the id's last two characters into their own DNS label", () => {
+    expect(environmentHost("abc123ff")).toBe("defaultabc123.ff.environment.api.powerplatform.com");
+  });
+
+  it("does not hardcode the df label for tenants that end in something else", () => {
+    expect(environmentHost(ENV_ID)).toBe(
+      `default${ENV_ID.slice(0, -2)}.88.environment.api.powerplatform.com`,
+    );
   });
 
   it("uses the powerplatform environment api domain", () => {
-    expect(environmentHostCandidates(ENV_ID)[0]).toMatch(/\.environment\.api\.powerplatform\.com$/);
+    expect(environmentHost(ENV_ID)).toMatch(/\.environment\.api\.powerplatform\.com$/);
   });
 
-  it("picks the first candidate that resolves in DNS", async () => {
+  it("returns the host when it resolves in DNS", async () => {
     const host = await resolveEnvironmentHost(ENV_ID, async (candidate) =>
       candidate.startsWith(`default${ENV_ID.slice(0, -2)}.`),
     );
@@ -116,25 +128,21 @@ describe("environment host discovery", () => {
 
 describe("getOrCreateAgent", () => {
   it("creates and publishes an agent when the tenant has none", async () => {
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [] })],
-      ["minimalBots/api/publish", () => ({ titleId: "T1" })],
-      ["minimalBots/api", () => ({ botId: "B1" })],
-    ]);
-    const id = await getOrCreateAgent(deps({ fetch }));
-    expect(id).toBe("T_T1.B1.gpt.default");
+    const fetch = fakeFetch(studioRoutes([], { botId: "B1", titleId: "T_1" }));
+    expect(await getOrCreateAgent(deps({ fetch }))).toBe("T_1.B1.gpt.default");
   });
 
-  it("reuses an agent another host already provisioned for the same instructions", async () => {
+  it("publishes at the bot's own path", async () => {
+    const fetch = fakeFetch(studioRoutes([], { botId: "B1", titleId: "T_1" }));
+    await getOrCreateAgent(deps({ fetch }));
+    expect(fetch.mock.calls.some(([url]) => String(url).includes("/minimalBots/api/B1/publish?"))).toBe(true);
+  });
+
+  it("re-publishes an agent another host provisioned, because the list has no title id", async () => {
     const name = agentNameFor(agentInstructions());
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [{ shortBotName: name, botId: "B9", titleId: "T9" }] })],
-    ]);
-    const id = await getOrCreateAgent(deps({ fetch }));
-    expect(id).toBe("T_T9.B9.gpt.default");
-    expect(fetch.mock.calls.some(([url]) => String(url).includes("publish"))).toBe(false);
+    const fetch = fakeFetch(studioRoutes([{ shortBotName: name, botId: "B9" }], { titleId: "T_9" }));
+    expect(await getOrCreateAgent(deps({ fetch }))).toBe("T_9.B9.gpt.default");
+    expect(fetch.mock.calls.some(([, init]) => init?.body)).toBe(false);
   });
 
   it("uses the cached id without any network at all", async () => {
@@ -151,51 +159,41 @@ describe("getOrCreateAgent", () => {
   it("ignores a cache entry whose instructions have since changed", async () => {
     const cacheFile = tempFile();
     writeFileSync(cacheFile, JSON.stringify({ agentId: "T_stale.bot.gpt.default", instructionsHash: "m365-tool-agent-deadbeef" }));
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [] })],
-      ["minimalBots/api/publish", () => ({ titleId: "T2" })],
-      ["minimalBots/api", () => ({ botId: "B2" })],
-    ]);
-    expect(await getOrCreateAgent(deps({ fetch, cacheFile }))).toBe("T_T2.B2.gpt.default");
+    const fetch = fakeFetch(studioRoutes([], { botId: "B2", titleId: "T_2" }));
+    expect(await getOrCreateAgent(deps({ fetch, cacheFile }))).toBe("T_2.B2.gpt.default");
   });
 
   it("caches what it provisioned so the next process skips the work", async () => {
     const cacheFile = tempFile();
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [] })],
-      ["minimalBots/api/publish", () => ({ titleId: "T3" })],
-      ["minimalBots/api", () => ({ botId: "B3" })],
-    ]);
+    const fetch = fakeFetch(studioRoutes([], { botId: "B3", titleId: "T_3" }));
     await getOrCreateAgent(deps({ fetch, cacheFile }));
-    expect(JSON.parse(readFileSync(cacheFile, "utf8")).agentId).toBe("T_T3.B3.gpt.default");
+    expect(JSON.parse(readFileSync(cacheFile, "utf8")).agentId).toBe("T_3.B3.gpt.default");
   });
 
   it("never deletes an existing agent", async () => {
     // Another host on the same tenant may be mid-conversation with it.
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [{ shortBotName: "m365-tool-agent-oldoldold", botId: "B0", titleId: "T0" }] })],
-      ["minimalBots/api/publish", () => ({ titleId: "T4" })],
-      ["minimalBots/api", () => ({ botId: "B4" })],
-    ]);
+    const fetch = fakeFetch(
+      studioRoutes([{ shortBotName: "m365-tool-agent-oldoldold", botId: "B0" }], { botId: "B4", titleId: "T_4" }),
+    );
     await getOrCreateAgent(deps({ fetch }));
     expect(fetch.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
   });
 
-  it("sends the instructions when creating the bot", async () => {
-    const fetch = fakeFetch([
-      BAP_ROUTE,
-      ["minimalBots/api/botlist", () => ({ value: [] })],
-      ["minimalBots/api/publish", () => ({ titleId: "T5" })],
-      ["minimalBots/api", () => ({ botId: "B5" })],
-    ]);
+  it("creates the bot as a gpt component carrying the instructions and an icon", async () => {
+    const fetch = fakeFetch(studioRoutes([], { botId: "B5", titleId: "T_5" }));
     await getOrCreateAgent(deps({ fetch }));
-    const create = fetch.mock.calls.find(
-      ([url, init]) => String(url).includes("minimalBots/api") && init?.method === "POST" && !String(url).includes("publish"),
-    );
-    expect(String(create?.[1]?.body)).toContain("fenced");
+    const create = fetch.mock.calls.find(([url, init]) => init?.method === "POST" && init?.body && String(url).includes("minimalBots"));
+    const body = JSON.parse(String(create?.[1]?.body));
+    expect(body.bot.template).toBe("gpt-1.1.0");
+    expect(body.bot.iconBase64.length).toBeGreaterThan(0);
+    const component = body.botComponentChanges[0].component;
+    expect(component.$kind).toBe("GptComponent");
+    expect(component.metadata.instructions.segments[0].value).toContain("fenced");
+  });
+
+  it("fails rather than building an id when create returns no bot", async () => {
+    const fetch = fakeFetch(studioRoutes([], { titleId: "T_6" }));
+    await expect(getOrCreateAgent(deps({ fetch }))).rejects.toThrow(/no bot id/);
   });
 
   it("surfaces a licensing or permission failure rather than returning a bogus id", async () => {

@@ -38,8 +38,20 @@ describe("model catalog", () => {
     expect(toneFor("gpt-5.5-think-deeper")).toBe("Gpt_5_5_Reasoning");
     expect(toneFor("gpt-5.6-think-deeper")).toBe("Gpt_5_6_Reasoning");
     expect(toneFor("m365-copilot")).toBe("magic");
-    expect(toneFor("quick")).toBe("Gpt_Quick");
+    expect(toneFor("quick")).toBe("Gpt_5_5_Chat");
+    expect(toneFor("think-deeper")).toBe("Gpt_5_5_Reasoning");
+    expect(toneFor("gpt-5.4-quick")).toBe("Gpt_5_4_Chat");
+    expect(toneFor("gpt-5.3")).toBe("Gpt_5_3_Chat");
+    expect(toneFor("gpt-5.2-quick")).toBe("Gpt_5_2_Chat");
     expect(toneFor("claude-sonnet")).toBe("Claude_Sonnet");
+  });
+
+  // The server fails these with `Failed to invoke 'Chat'`, and every retry is wasted.
+  it("advertises no retired tone", () => {
+    const retired = /_Quick$|^Gpt_Chat$|^Gpt_Reasoning$/;
+    for (const model of MODELS) {
+      expect(model.tone ?? "", `${model.id} selects a retired tone`).not.toMatch(retired);
+    }
   });
 
   it("treats unknown model ids as the default rather than throwing", () => {
@@ -47,9 +59,14 @@ describe("model catalog", () => {
     expect(toneFor("something-we-never-shipped")).toBe(toneFor(DEFAULT_MODEL));
   });
 
-  it("defaults to a reasoning model that their README measured as tool-compliant", () => {
-    expect(DEFAULT_MODEL).toBe("gpt-5.5-think-deeper");
-    expect(resolveModel(DEFAULT_MODEL).reasoning).toBe(true);
+  it("defaults to a chat tone, the kind measured making tool calls on a live tenant", () => {
+    expect(DEFAULT_MODEL).toBe("quick");
+    expect(resolveModel(DEFAULT_MODEL).reasoning).toBe(false);
+  });
+
+  it("offers the GPT-5.6 chat tone", () => {
+    expect(toneFor("gpt-5.6")).toBe("Gpt_5_6_Chat");
+    expect(toneFor("gpt-5.6-quick")).toBe("Gpt_5_6_Chat");
   });
 
   it("marks reasoning models so opencode can render them correctly", () => {

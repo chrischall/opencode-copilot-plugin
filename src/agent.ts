@@ -35,6 +35,20 @@ const BAP_ENVIRONMENT_URL =
   "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/~default?api-version=2023-06-01";
 const COPILOT_STUDIO_API_VERSION = "2022-03-01-preview";
 
+/** A plain 48×48 square: the portal always sends an icon, so we do too. */
+const BOT_ICON_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAOklEQVR42u3OQQ0AAAgEoCtjMuNbwhbOBxsBSPW8EiEhISEhISEhISEhISEhISEhISEhISEhISGhOwsQ7wvEcqrbYwAAAABJRU5ErkJggg==";
+
+const EMPTY_GUID = "00000000-0000-0000-0000-000000000000";
+
+function studioHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "x-ms-user-agent": "PVA-Portal/1.0.0 (Web; ReactNative: false)",
+  };
+}
+
 /**
  * The agent's server-side instructions.
  *
@@ -62,38 +76,32 @@ export function agentNameFor(instructions: string): string {
   return `m365-tool-agent-${hash}`;
 }
 
-/** The id M365 expects in `threadLevelGptId` / `gpts`. */
+/** The id M365 expects in `threadLevelGptId` / `gpts`. `titleId` arrives already `T_`-prefixed. */
 export function buildAgentId(titleId: string, botId: string): string {
-  return `T_${titleId}.${botId}.gpt.default`;
+  return `${titleId}.${botId}.gpt.default`;
 }
 
 /**
- * Power Platform hosts to try for this environment.
+ * The Power Platform host for this environment.
  *
- * The obvious full-length label frequently does not resolve; the host that works has
- * the last two characters trimmed. Rather than pick one, probe both.
+ * The id is split across two DNS labels: all but its last two characters, then those
+ * two. It looks like a fixed `.df.` on any tenant whose id happens to end in `df`.
  */
-export function environmentHostCandidates(envId: string): string[] {
-  const suffix = "df.environment.api.powerplatform.com";
-  return [
-    `default${envId}.${suffix}`,
-    `default${envId.slice(0, -1)}.${suffix}`,
-    `default${envId.slice(0, -2)}.${suffix}`,
-  ];
+export function environmentHost(envId: string): string {
+  return `default${envId.slice(0, -2)}.${envId.slice(-2)}.environment.api.powerplatform.com`;
 }
 
 export type DnsResolver = (host: string) => Promise<boolean>;
 
-/** First candidate host that actually resolves. */
+/** The environment's host, checked in DNS so a wrong one fails with a usable message. */
 export async function resolveEnvironmentHost(
   envId: string,
   resolveDns: DnsResolver,
   override?: string,
 ): Promise<string> {
   if (override) return override;
-  for (const candidate of environmentHostCandidates(envId)) {
-    if (await resolveDns(candidate)) return candidate;
-  }
+  const host = environmentHost(envId);
+  if (await resolveDns(host)) return host;
   throw new Error(
     `Could not resolve a Power Platform host for environment ${envId}. Set M365_POWERPLATFORM_HOST to override.`,
   );
@@ -128,7 +136,8 @@ interface AgentCache {
 /**
  * Resolve the declarative agent id, provisioning one if the tenant has none.
  *
- * Order: local cache → the tenant's existing bots → create + publish.
+ * Order: local cache → the tenant's existing bot, else create → publish (which is also
+ * the only way to learn an existing bot's title id).
  */
 export async function getOrCreateAgent(deps: AgentDeps): Promise<string> {
   const cacheFile = deps.cacheFile ?? AGENT_FILE;
@@ -151,15 +160,7 @@ export async function getOrCreateAgent(deps: AgentDeps): Promise<string> {
   );
   const token = await deps.getTokenForScope([POWERPLATFORM_SCOPE]);
 
-  const existing = await findBot(doFetch, host, token, wantedName);
-  if (existing) {
-    const agentId = buildAgentId(existing.titleId, existing.botId);
-    writeCache(cacheFile, { agentId, instructionsHash: wantedName });
-    log.info("reusing existing agent", agentId);
-    return agentId;
-  }
-
-  const botId = await createBot(doFetch, host, token, wantedName);
+  const botId = (await findBot(doFetch, host, token, wantedName)) ?? (await createBot(doFetch, host, token, wantedName));
   const titleId = await publishBot(doFetch, host, token, botId);
   const agentId = buildAgentId(titleId, botId);
   writeCache(cacheFile, { agentId, instructionsHash: wantedName });
@@ -184,33 +185,94 @@ async function discoverEnvironmentId(
   return guid.replace(/-/g, "");
 }
 
-interface BotRef {
-  botId: string;
-  titleId: string;
-}
-
 /**
  * Find a bot by name.
  *
  * Name lookup is reliable because Copilot Studio reflects the display name we set
- * into `shortBotName` byte for byte — hyphens, length and case all survive.
+ * into `shortBotName` byte for byte — hyphens, length and case all survive. The list
+ * carries no title id.
  */
 async function findBot(
   doFetch: typeof globalThis.fetch,
   host: string,
   token: string,
   name: string,
-): Promise<BotRef | undefined> {
-  const url = `https://${host}/copilotstudio/minimalBots/api/botlist?api-version=${COPILOT_STUDIO_API_VERSION}`;
-  const response = await doFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+): Promise<string | undefined> {
+  const url = `https://${host}/copilotstudio/minimalBots/api?api-version=${COPILOT_STUDIO_API_VERSION}`;
+  const response = await doFetch(url, { headers: studioHeaders(token) });
   if (!response.ok) throw new AgentHttpError(await describeFailure("listing agents", response), response.status);
 
-  const body: any = await response.json();
-  const bots: any[] = body?.value ?? body?.bots ?? [];
-  const match = bots.find((bot) => bot?.shortBotName === name || bot?.displayName === name);
-  if (!match) return undefined;
-  if (!match.titleId || !match.botId) return undefined;
-  return { botId: match.botId, titleId: match.titleId };
+  const bots: any = await response.json();
+  if (!Array.isArray(bots)) throw new Error("Copilot Studio returned an unexpected agent list");
+  return bots.find((bot) => bot?.shortBotName === name)?.botId;
+}
+
+/** The change set the Copilot Studio portal posts to create a GPT-template bot. */
+function createBotBody(name: string): unknown {
+  const noDiagnostics = { diagnostics: [] };
+  return {
+    botComponentChanges: [
+      {
+        $kind: "BotComponentInsert",
+        component: {
+          ...noDiagnostics,
+          $kind: "GptComponent",
+          id: EMPTY_GUID,
+          displayName: name,
+          description: "Tool-calling format instructions for an OpenAI-compatible bridge.",
+          schemaName: `${EMPTY_GUID}.gpt.default`,
+          metadata: {
+            ...noDiagnostics,
+            $kind: "GptComponentMetadata",
+            tools: [],
+            conversationStarters: [],
+            instructions: {
+              ...noDiagnostics,
+              $kind: "TemplateLine",
+              segments: [{ ...noDiagnostics, $kind: "TextSegment", value: agentInstructions() }],
+            },
+            knowledgeSources: { ...noDiagnostics, $kind: "SearchAllKnowledgeSources" },
+            gptCapabilities: {
+              ...noDiagnostics,
+              $kind: "GptCapabilities",
+              codeInterpreter: false,
+              generateImages: false,
+              webBrowsing: false,
+              searchOneDriveAndSharePoint: false,
+              searchTeams: false,
+              searchMeetings: false,
+              searchEmails: false,
+              searchPeople: false,
+            },
+            aISettings: { ...noDiagnostics, $kind: "AISettings", useModelKnowledge: true },
+          },
+        },
+      },
+    ],
+    cloudFlowDefinitionChanges: [],
+    connectorDefinitionChanges: [],
+    environmentVariableChanges: [],
+    connectionReferenceChanges: [],
+    aIPluginOperationChanges: [],
+    componentCollectionChanges: [],
+    dataverseTableSearchChanges: [],
+    dataverseTableSearchEntityConfigurationChanges: [],
+    dataverseTableSearchGlossaryConfigurationChanges: [],
+    dataverseTableSearchEntityColumnSynonymChanges: [],
+    aIModelChanges: [],
+    connectedAgentDefinitionChanges: [],
+    bot: {
+      $kind: "BotEntity",
+      authorizedSecurityGroupIds: [],
+      supportedLanguages: [],
+      diagnostics: [],
+      displayName: name,
+      language: 1033,
+      schemaName: EMPTY_GUID,
+      template: "gpt-1.1.0",
+      iconBase64: BOT_ICON_BASE64,
+    },
+  };
 }
 
 async function createBot(
@@ -222,21 +284,13 @@ async function createBot(
   const url = `https://${host}/copilotstudio/minimalBots/api?api-version=${COPILOT_STUDIO_API_VERSION}`;
   const response = await doFetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      displayName: name,
-      description: "Tool-calling format instructions for an OpenAI-compatible bridge.",
-      gptComponent: {
-        instructions: agentInstructions(),
-        conversationStarters: [],
-        aISettings: { useModelKnowledge: true },
-      },
-    }),
+    headers: studioHeaders(token),
+    body: JSON.stringify(createBotBody(name)),
   });
   if (!response.ok) throw new AgentHttpError(await describeFailure("creating the agent", response), response.status);
 
   const body: any = await response.json();
-  const botId = body?.botId ?? body?.id;
+  const botId = body?.bot?.schemaName ?? body?.bot?.cdsBotId;
   if (!botId) throw new Error("Copilot Studio created an agent but returned no bot id");
   return botId;
 }
@@ -247,16 +301,12 @@ async function publishBot(
   token: string,
   botId: string,
 ): Promise<string> {
-  const url = `https://${host}/copilotstudio/minimalBots/api/publish?api-version=${COPILOT_STUDIO_API_VERSION}&botId=${encodeURIComponent(botId)}`;
-  const response = await doFetch(url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ botId }),
-  });
+  const url = `https://${host}/copilotstudio/minimalBots/api/${encodeURIComponent(botId)}/publish?api-version=${COPILOT_STUDIO_API_VERSION}`;
+  const response = await doFetch(url, { method: "POST", headers: studioHeaders(token) });
   if (!response.ok) throw new AgentHttpError(await describeFailure("publishing the agent", response), response.status);
 
   const body: any = await response.json();
-  const titleId = body?.titleId ?? body?.TitleId;
+  const titleId = body?.TitleId;
   if (!titleId) throw new Error("Copilot Studio published the agent but returned no title id");
   return titleId;
 }
