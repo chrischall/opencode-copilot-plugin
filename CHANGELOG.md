@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.1.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.0.0...v2.1.0) (2026-11-09)
+
+
+### Features
+
+* **models:** add mailbox-grounded m365/work models ([#86](https://github.com/chrischall/opencode-copilot-plugin/issues/86)) ([d928953](https://github.com/chrischall/opencode-copilot-plugin/commit/d928953fc069dfd4fa5785bd95826780d448b03b))
+
+
+### Bug Fixes
+
+* **server:** grounded models carry no tools, matching read-only Q&A docs ([#89](https://github.com/chrischall/opencode-copilot-plugin/issues/89)) ([635a6d0](https://github.com/chrischall/opencode-copilot-plugin/commit/635a6d017e1d62c967f3422a50f6e85189179af3))
+
 ## [2.0.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v0.4.0...v2.0.0) (2026-11-03)
 
 
