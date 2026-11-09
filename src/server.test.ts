@@ -295,6 +295,31 @@ describe("chat completions", () => {
   });
 });
 
+describe("grounded models carry no tools", () => {
+  const chatArg = (server: StubServer) => server.last().frames.find((f) => f.type === 4).arguments[0];
+
+  it("sends no fenced tool prompt on a grounded turn, even when the client sends tools", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("Here is your inbox summary."), completion()] });
+    const { url } = await start();
+    await post(url, { model: "work", messages: [{ role: "user", content: "what's in my inbox?" }], tools: [bashTool] });
+    const arg = chatArg(stub);
+    // No tool block offered to M365; the built-in grounding agent is used, not the declarative one.
+    expect(arg.message.text).not.toMatch(/```bash/);
+    expect(arg.gpts[0].id).toBe("bizchat-as-gpt-scenario");
+    expect(arg.threadLevelGptId).toBeUndefined();
+  });
+
+  it("does not parse a fenced block in a grounded answer as a tool call", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("```bash\nls -la\n```"), completion()] });
+    const { url } = await start();
+    const body: any = await (
+      await post(url, { model: "work", messages: [{ role: "user", content: "show me" }], tools: [bashTool] })
+    ).json();
+    expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.choices[0].message.tool_calls).toBeUndefined();
+  });
+});
+
 describe("trimming the toolset the model sees", () => {
   // The nine tools opencode 1.18.18 actually sends, regardless of its own config.
   const opencodeTools = ["apply_patch", "bash", "glob", "grep", "read", "skill", "task", "todowrite", "webfetch"].map(

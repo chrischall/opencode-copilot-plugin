@@ -368,17 +368,22 @@ async function runTurn(
     ...(context.deps.endpoint ? { endpoint: context.deps.endpoint } : {}),
   });
 
+  // A grounded (mailbox) model is read-only Q&A over the user's own data: it
+  // carries no opencode tools, so the fenced tool prompt is never attached, no
+  // declarative agent is wired, and no tool-call parsing runs on its answer. That
+  // is what keeps "ask your work" from being handed a coding toolset it can't act
+  // on. Every tools-derived decision below reads `effectiveTools`.
+  const effectiveTools = model.grounded ? [] : tools;
+
   // Only the messages this turn carries: M365 already has any earlier image.
   const images = collectImages(body.messages, conversation.sentMessageCount);
-  const prompt = buildTurnPrompt(body.messages, tools, conversation.sentMessageCount, {
+  const prompt = buildTurnPrompt(body.messages, effectiveTools, conversation.sentMessageCount, {
     ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
   });
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
   // actually needs tool instructions. Plain chat then reaches the tone's real model.
-  // A grounded (mailbox) model brings its own built-in agent, so skip the
-  // declarative coding agent there.
-  const agent = !model.grounded && tools.length > 0 ? await context.agentId() : null;
+  const agent = effectiveTools.length > 0 ? await context.agentId() : null;
 
   const abort = new AbortController();
   request.on("close", () => {
@@ -391,7 +396,7 @@ async function runTurn(
   // fence closes, so a tool turn has to be buffered and emitted at the end. A
   // grounded turn is also buffered, so its answer is emitted once with the citation
   // tokens already stripped rather than streaming them raw.
-  const canStreamText = streaming && tools.length === 0 && !model.grounded;
+  const canStreamText = streaming && effectiveTools.length === 0 && !model.grounded;
 
   if (streaming) startSse(response);
 
@@ -412,13 +417,13 @@ async function runTurn(
     conversation.sentMessageCount = body.messages.length + 1;
 
     if (!streaming) {
-      sendJson(response, 200, buildCompletion(result, { model: model.id, tools, allowMultiple: context.deps.allowMultiTool ?? false }));
+      sendJson(response, 200, buildCompletion(result, { model: model.id, tools: effectiveTools, allowMultiple: context.deps.allowMultiTool ?? false }));
       return;
     }
 
-    finishStream(response, streamId, model.id, result, tools, canStreamText, context.deps.allowMultiTool ?? false);
+    finishStream(response, streamId, model.id, result, effectiveTools, canStreamText, context.deps.allowMultiTool ?? false);
   } catch (error) {
-    handleTurnFailure(response, error, streaming, tools.length);
+    handleTurnFailure(response, error, streaming, effectiveTools.length);
   }
 }
 
