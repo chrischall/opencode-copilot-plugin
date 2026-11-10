@@ -266,8 +266,8 @@ A re-test on 2026-11-10 (`gpt-5.5-think-deeper`, 8 conversations) compared build
 and without the prompt trimming and give-up nudge. Without them: 1/4 solved. With them:
 3/4. The first reply was "the workspace tools are unavailable" in all 8 runs, so
 removing opencode's Code Mode text did not change that. Sometimes the model pasted the
-command it wanted the user to run, and the proxy ran it. The three extra solves came
-from the nudge. Reasoning tones remain not recommended for tool work; with the nudge
+command it wanted the user to run, and the proxy ran it. All three solves with them came
+after the nudge. Reasoning tones remain not recommended for tool work; with the nudge
 they often recover.
 
 A non-default tone (Claude, the reasoning tones) only takes effect when **no** agent is
