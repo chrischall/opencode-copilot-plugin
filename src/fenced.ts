@@ -187,6 +187,10 @@ export interface PromptOptions {
    * is a reason for the model to stop trusting it. Defaults to true.
    */
   firstTurn?: boolean;
+  /** `relay` puts the request in the user's voice; see `toolRouteFor` in models.ts. */
+  framing?: "default" | "relay";
+  /** The model's own sandbox tools, named in the relay note. */
+  sandbox?: string;
 }
 
 /**
@@ -202,6 +206,7 @@ export function buildToolPrompt(tools: readonly ToolDef[], options: PromptOption
   if (tools.length === 0) return "";
 
   const shell = findShellTool(tools);
+  if (options.framing === "relay") return buildRelayPrompt(tools, shell, options.sandbox);
   const useShellFraming = options.shellFraming ?? Boolean(shell);
 
   const lines: string[] = [];
@@ -211,26 +216,7 @@ export function buildToolPrompt(tools: readonly ToolDef[], options: PromptOption
   );
   lines.push("");
 
-  for (const tool of tools) {
-    const shape = shapeOf(tool);
-    const description = tool.function.description?.trim();
-    if (description) lines.push(`${tool.function.name} — ${firstSentence(description)}`);
-    lines.push("```" + tool.function.name);
-    for (const header of shape.headers) {
-      lines.push(`${header}: ${placeholderFor(header, shape.tool)}`);
-    }
-    if (shape.editPair) {
-      lines.push(SEARCH_MARKER);
-      lines.push("the exact existing text");
-      lines.push(DIVIDER_MARKER);
-      lines.push("the replacement text");
-      lines.push(REPLACE_MARKER);
-    } else if (shape.bodyParam) {
-      lines.push(`<${shape.bodyParam}>`);
-    }
-    lines.push("```");
-    lines.push("");
-  }
+  for (const tool of tools) lines.push(...describeTool(tool), "");
 
   if (useShellFraming && shell) {
     lines.push(
@@ -250,6 +236,46 @@ export function buildToolPrompt(tools: readonly ToolDef[], options: PromptOption
   lines.push("</tools>");
 
   return lines.join("\n");
+}
+
+/** One tool's one-line description and fence template. */
+function describeTool(tool: ToolDef): string[] {
+  const shape = shapeOf(tool);
+  const lines: string[] = [];
+  const description = tool.function.description?.trim();
+  if (description) lines.push(`${tool.function.name} — ${firstSentence(description)}`);
+  lines.push("```" + tool.function.name);
+  for (const header of shape.headers) lines.push(`${header}: ${placeholderFor(header, shape.tool)}`);
+  if (shape.editPair) {
+    lines.push(SEARCH_MARKER, "the exact existing text", DIVIDER_MARKER, "the replacement text", REPLACE_MARKER);
+  } else if (shape.bodyParam) {
+    lines.push(`<${shape.bodyParam}>`);
+  }
+  lines.push("```");
+  return lines;
+}
+
+/**
+ * The relay framing: not an agent with a shell, but a pair-programmer telling the
+ * user what to run next. A model that doubts it can reach the workspace has nothing
+ * to doubt here, because the user runs the commands. From the reference project's
+ * `relay` variant, unchanged in substance; it is repeated every turn, as there.
+ */
+function buildRelayPrompt(tools: readonly ToolDef[], shell: ToolDef | undefined, sandbox: string | undefined): string {
+  const block = shell ? shell.function.name : "<tool name>";
+  const sandboxNote = sandbox
+    ? ` Please don't use your own sandbox tools (${sandbox}): that's a separate cloud machine and my project isn't on it.`
+    : " Please don't use a sandbox of your own: my project isn't on it.";
+  const lines = [
+    `Before the task, a note on how we'll work: I'd like you to guide me through this from my terminal, one command at a time.${sandboxNote}`,
+    "",
+    `Each time you want something run or looked at, reply with just that step in a single \`\`\`${block} block (or one of the other blocks below). I'll run it in my project directory right away and paste the real output back to you as a <tool_response>. The files the task mentions are already there, so it's best to start by looking at them. When the task is complete, tell me in a sentence instead of sending a block.`,
+    "",
+    "The blocks I can run:",
+    "",
+  ];
+  for (const tool of tools) lines.push(...describeTool(tool), "");
+  return lines.join("\n").trimEnd();
 }
 
 function firstSentence(text: string): string {

@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseToolCalls, renderToolCall, type ToolDef } from "./fenced.js";
+import { buildToolPrompt, parseToolCalls, renderToolCall, type ToolDef } from "./fenced.js";
 
 // The lean toolset from a captured opencode 2.2.5 request.
 const tools: ToolDef[] = JSON.parse(
@@ -172,5 +172,30 @@ describe("rendering a past call back into a fence", () => {
 
   it("falls back to plain JSON for a tool it does not know", () => {
     expect(renderToolCall("todo", '{"x":1}', tools)).toContain('{"x":1}');
+  });
+});
+
+describe("the relay framing", () => {
+  const relay = buildToolPrompt(tools, { framing: "relay" });
+
+  it("asks, in the user's voice, to be guided one command at a time", () => {
+    expect(relay).toMatch(/guide me through this from my terminal, one command at a time/);
+    expect(relay).toMatch(/paste the real output back/);
+    expect(relay).not.toMatch(/You are working in a real workspace/);
+  });
+
+  it("still lists every tool as a fence", () => {
+    for (const name of ["edit", "grep", "read", "shell", "write"]) expect(relay).toContain("```" + name);
+  });
+
+  it("names the sandbox only when told which one the model has", () => {
+    expect(relay).not.toMatch(/\/home\/claude/);
+    expect(buildToolPrompt(tools, { framing: "relay", sandbox: "bash_tool, create_file, … in /home/claude" })).toMatch(
+      /\/home\/claude/,
+    );
+  });
+
+  it("is softer than the default, not louder", () => {
+    expect(relay).not.toMatch(/\b(?:MUST|NEVER|ONLY|ALWAYS)\b/);
   });
 });

@@ -42,3 +42,10 @@ describe("nudgeFor", () => {
     expect(text.length).toBeLessThan(300);
   });
 });
+
+describe("the relay nudge", () => {
+  it("stays in the user's voice", () => {
+    expect(nudgeFor(false, "relay")).toMatch(/I'll run it/);
+    expect(nudgeFor(true, "relay")).toMatch(/I ran/);
+  });
+});

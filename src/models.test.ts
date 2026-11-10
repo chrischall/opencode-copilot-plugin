@@ -7,6 +7,7 @@ import {
   listModelIds,
   resolveModel,
   toneFor,
+  toolRouteFor,
 } from "./models.js";
 
 describe("model catalog", () => {
@@ -127,5 +128,21 @@ describe("model picker names", () => {
 
   it("does not badge the local titler, which is neither", () => {
     expect(resolveModel(LOCAL_TITLE_MODEL).name).not.toMatch(/^(Work|Code) · /);
+  });
+});
+
+describe("how each tone is asked to call tools", () => {
+  it("keeps the chat GPT tones on the agent with the default framing", () => {
+    expect(toolRouteFor("Gpt_5_5_Chat")).toEqual({ framing: "default", agent: true });
+    expect(toolRouteFor("magic")).toEqual({ framing: "default", agent: true });
+  });
+
+  it("gives the reasoning tones the relay framing and keeps the agent", () => {
+    // Agent-less GPT-5.x made no tool calls in the reference project (0/4).
+    expect(toolRouteFor("Gpt_5_5_Reasoning")).toEqual({ framing: "relay", agent: true });
+  });
+
+  it("leaves Claude on the agent, since an unlicensed account refuses Claude without it", () => {
+    for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning"]) expect(toolRouteFor(tone)).toEqual({ framing: "default", agent: true });
   });
 });

@@ -328,6 +328,9 @@ export interface PromptOptions {
   leanSystemPrompt?: string;
   /** A line about how the last reply was handled, put ahead of this turn's messages. */
   note?: string;
+  /** How the tool block is worded; see `toolRouteFor`. */
+  framing?: "default" | "relay";
+  sandbox?: string;
 }
 
 /**
@@ -361,7 +364,15 @@ export function buildTurnPrompt(
     }
   }
 
-  if (tools.length > 0) parts.push(buildToolPrompt(tools, { firstTurn: isFirstTurn }));
+  if (tools.length > 0) {
+    parts.push(
+      buildToolPrompt(tools, {
+        firstTurn: isFirstTurn,
+        ...(options.framing ? { framing: options.framing } : {}),
+        ...(options.sandbox ? { sandbox: options.sandbox } : {}),
+      }),
+    );
+  }
 
   // Correlate tool results back to the call that produced them, so the label can say
   // what the output actually is.

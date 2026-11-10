@@ -219,14 +219,19 @@ in `apiKey`, or export the same `M365_PROXY_KEY` to opencode and leave `apiKey` 
 
 ### Errors and the turn log
 
-When M365 refuses a turn, the proxy answers with an HTTP 422 so opencode does not
-retry it: opencode retries a 5xx or a 429 several times, which against a throttle only
-extends it. The error `code` says which refusal it was:
+When M365 refuses a turn, the proxy reports it so that opencode does not retry it.
+Retrying a throttle only extends it, and a refusal like a missing licence never changes.
+opencode streams, so the refusal usually arrives inside a stream that already answered
+200. opencode then decides from the error body alone: it retries an error whose code
+contains "unavailable", whose message says "try again" (M365's own refusals do), or
+which mentions a rate limit. The proxy therefore sends type `invalid_request_error`,
+avoids those words, and uses HTTP 422 when nothing has been streamed yet. In 2.2.0 a
+licence refusal was retried ten times. The error `code` says which refusal it was:
 
 | Code | Meaning |
 |---|---|
 | `m365_throttled` | The account is throttled. Wait for a lull. |
-| `m365_unavailable` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone |
+| `m365_not_served` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone. Called `m365_unavailable` up to 2.2.0 |
 | `m365_turn_rejected` | The server refused the request outright, typically a retired tone |
 | `m365_disengaged` | M365's filter refused to engage with the prompt. A disengaged conversation stays that way, so the proxy drops it: the next request opens a fresh conversation and replays the whole history |
 
@@ -261,19 +266,27 @@ task per run; small samples):
 | `m365/m365-copilot` | 1/1 |
 | `m365/gpt-5.5` (same tone as `quick`) | 0/1 |
 | `m365/gpt-5.6` | 0/1 (the reference project: 7/30), so its picker name says "unreliable tool calls" |
-| `m365/gpt-5.5-think-deeper` | 0/3 — says it has no file tool |
+| `m365/gpt-5.5-think-deeper` | 0/3 — said it had no file tool; 4/4 with the relay framing, below |
 
 The reference project's README reports 100% tool compliance for `gpt-5.5-think-deeper`;
 its protocol notes (`m365-copilot-api.md`, quirk #13) say reasoning tones disengage with
 an agent attached. Our runs agree with the notes. Reasoning tones still serve plain chat.
 
-A re-test on 2026-11-10 (`gpt-5.5-think-deeper`, 8 conversations) compared builds with
-and without the prompt trimming and give-up nudge. Without them: 1/4 solved. With them:
-3/4. The first reply was "the workspace tools are unavailable" in all 8 runs, so
-removing opencode's Code Mode text did not change that. Sometimes the model pasted the
-command it wanted the user to run, and the proxy ran it. All three solves with them came
-after the nudge. Reasoning tones remain not recommended for tool work; with the nudge
-they often recover.
+The reasoning tones now get a different framing on tool turns. The tool block is
+worded as the user asking to be guided through their own terminal, one command at a
+time, pasting back the real output (the reference project's `relay`). A model that
+doubts it can reach the workspace has nothing to doubt, because the user runs the
+commands. Measured on `gpt-5.5-think-deeper` on 2026-11-10, 16 conversations:
+
+| Framing | First reply said the tools were unavailable | Solved |
+|---|---|---|
+| Default, before the give-up nudge | 4/4 | 1/4 |
+| Default, with the nudge | 8/8 | 5/8 |
+| Relay, with the nudge | 0/4 | 4/4, with no nudge needed |
+
+Claude tones stay on the agent, which M365 answers on GPT. The reference project ran
+Claude without the agent and with `relay`, but an account with no Claude licence then
+refuses every tool turn, and that could not be measured on a licensed account here.
 
 A non-default tone (Claude, the reasoning tones) only takes effect when **no** agent is
 attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
