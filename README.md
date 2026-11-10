@@ -143,10 +143,21 @@ Both builds had the tolerant parser:
 | Find a value across six files | 6/6, 2.7 turns | 6/6, 2.0 turns |
 | Edit one config value, leave the rest | 6/6, 3.5 turns | 6/6, 4.5 turns (re-read the file to check, 3 of 6) |
 
-Every run made its tool call on the first turn, so the nudge never fired; that it
-recovers a give-up is tested offline only. No turn disengaged, and none ran on a
-forked conversation (`turnCount` rose by one each turn). Long sessions and the
-reasoning tones are not yet measured.
+Every run made its tool call on the first turn, so the nudge never fired. No turn
+disengaged, and none ran on a forked conversation (`turnCount` rose by one each turn).
+
+Long sessions (2026-11-10, `m365/quick`, with all three): 4/4 solved, no nudges, no
+forks.
+
+| Task | Runs | Turns |
+|---|---|---|
+| Rename a function across ten modules, one edit at a time, then run the test | 2/2 | 37, 25 |
+| Fix a 1,500-line file whose test fails, then fails again on a second bug | 2/2 | 8, 8 |
+
+`turnCount` rose by one on every turn of the 37-turn session. Repeated calls were
+progress checks (grep for what was left, re-reading a file after editing it), not loops.
+These runs had the routing header, so they show it causes no harm. They don't show it
+is needed, because no run without it was tried.
 
 ## opencode 2
 
@@ -250,6 +261,14 @@ task per run; small samples):
 The reference project's README reports 100% tool compliance for `gpt-5.5-think-deeper`;
 its protocol notes (`m365-copilot-api.md`, quirk #13) say reasoning tones disengage with
 an agent attached. Our runs agree with the notes. Reasoning tones still serve plain chat.
+
+A re-test on 2026-11-10 (`gpt-5.5-think-deeper`, 8 conversations) compared builds with
+and without the prompt trimming and give-up nudge. Without them: 1/4 solved. With them:
+3/4. The first reply was "the workspace tools are unavailable" in all 8 runs, so
+removing opencode's Code Mode text did not change that. Sometimes the model pasted the
+command it wanted the user to run, and the proxy ran it. All three solves with them came
+after the nudge. Reasoning tones remain not recommended for tool work; with the nudge
+they often recover.
 
 A non-default tone (Claude, the reasoning tones) only takes effect when **no** agent is
 attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
