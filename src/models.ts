@@ -151,3 +151,31 @@ export function isLocalModel(id: string | undefined | null): boolean {
 export function listModelIds(): string[] {
   return MODELS.map((model) => model.id);
 }
+
+/** How a tool turn is put to M365 for a given tone. */
+export interface ToolRoute {
+  /** `relay`: the user asks to be guided through their own terminal, one command at a time. */
+  framing: "default" | "relay";
+  /** Attach the declarative agent. */
+  agent: boolean;
+  /** The model's own sandbox tools, named so the relay note can steer it away from them. */
+  sandbox?: string;
+}
+
+/**
+ * - Reasoning GPT tones keep the agent (agent-less GPT-5.x made no tool calls in the
+ *   reference project, 0/4), but under the default framing they say they cannot reach
+ *   the workspace, even after a command succeeded. The reference project's `relay`
+ *   framing, where the user asks to be guided through their own terminal, took that to
+ *   30/30. Ours said it on the first reply in 8 of 8 runs.
+ * - Chat GPT tones work as they are.
+ * - Claude stays as it was: with the agent, which M365 answers on GPT. The reference
+ *   project ran Claude without the agent and with `relay` (193/200), but without the
+ *   agent an account with no Claude licence refuses every tool turn
+ *   (`ClaudeUnavailableForLicense`), where today it quietly gets GPT. Unmeasured on a
+ *   licensed account, so not adopted.
+ */
+export function toolRouteFor(tone: string | null): ToolRoute {
+  if (tone?.startsWith("Gpt_") && tone.endsWith("_Reasoning")) return { framing: "relay", agent: true };
+  return { framing: "default", agent: true };
+}

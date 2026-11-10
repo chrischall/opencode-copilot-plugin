@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem, throttling, type StubServer } from "../test/stub-copilot.js";
 import { AuthRequiredError } from "./auth.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
+import { opencodeWouldRetry } from "../test/opencode-retry.js";
 import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER, startServer, type ProxyHandle } from "./server.js";
 
 function fakeToken(oid = "oid", tid = "tid"): string {
@@ -761,6 +762,26 @@ describe("telling the model what ran", () => {
   });
 });
 
+describe("tool turns per tone", () => {
+  const chatArg = () => stub!.last().frames.find((f) => f.type === 4).arguments[0];
+
+  it("keeps the agent for a reasoning GPT tone, framed as a relay", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "gpt-5.5-think-deeper", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    expect(chatArg().threadLevelGptId).toBeDefined();
+    expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
+  });
+
+  it("leaves the default model as it was", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "quick", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    expect(chatArg().threadLevelGptId).toBeDefined();
+    expect(chatArg().message.text).not.toMatch(/guide me through/);
+  });
+});
+
 describe("the turn log", () => {
   it("records what M365 sent back and what was parsed out of it", async () => {
     stub = await startStubCopilot({
@@ -791,6 +812,54 @@ describe("the turn log", () => {
   });
 });
 
+describe("refusals opencode must not retry", () => {
+  // opencode always streams, so a refusal reaches it inside a 200 stream, and it then
+  // decides from the error's code and wording alone. 2.2.0 got that wrong: a licence
+  // refusal was retried ten times.
+  const scenarios = {
+    throttled: () => [
+      { type: 2, item: { messages: [], result: { value: "Throttled", errorCode: "PerUserThrottled", message: "Rate limit hit: too many requests" } } },
+      completion(),
+    ],
+    "not served": () => [
+      {
+        type: 2,
+        item: {
+          messages: [],
+          result: { value: "InternalError", message: "ClaudeUnavailableForLicense: Claude isn't available with your current license. Choose another model and try again." },
+        },
+      },
+      completion(),
+    ],
+    disengaged: () => [disengaged(), completion()],
+    rejected: () => [completion("Failed to invoke 'Chat'. Please try again.")],
+  };
+
+  const streamedError = (text: string) => {
+    const line = text.split("\n").find((l) => l.startsWith("data: {") && l.includes('"error"'));
+    return JSON.parse(line!.slice("data: ".length));
+  };
+
+  for (const [name, respond] of Object.entries(scenarios)) {
+    it(`words a ${name} refusal so a streaming client does not retry it`, async () => {
+      stub = await startStubCopilot({ respond });
+      const { url } = await start();
+      const text = await (await post(url, { stream: true, messages: [{ role: "user", content: "hi" }], tools: [bashTool] })).text();
+      const body = streamedError(text);
+      expect(body.error.code).toMatch(/^m365_/);
+      expect(opencodeWouldRetry(undefined, body), JSON.stringify(body)).toBe(false);
+    });
+
+    it(`answers a ${name} refusal with a 422 opencode does not retry`, async () => {
+      stub = await startStubCopilot({ respond });
+      const { url } = await start();
+      const response = await post(url, { messages: [{ role: "user", content: "hi" }], tools: [bashTool] });
+      expect(response.status).toBe(422);
+      expect(opencodeWouldRetry(422, (await response.json()) as any)).toBe(false);
+    });
+  }
+});
+
 describe("failures the client has to be able to tell apart", () => {
   it("reports a throttle as non-retryable, since every retry extends it", async () => {
     // opencode retried a 429 eleven times in 80s against a fake backend.
@@ -806,7 +875,7 @@ describe("failures the client has to be able to tell apart", () => {
     expect(((await response.json()) as any).error.code).toBe("m365_throttled");
   });
 
-  it("reports a model this account cannot use as unavailable, with M365's reason", async () => {
+  it("reports a model this account cannot use as not served, with M365's reason", async () => {
     stub = await startStubCopilot({
       respond: () => [
         {
@@ -823,7 +892,7 @@ describe("failures the client has to be able to tell apart", () => {
     const response = await post(url, { messages: [{ role: "user", content: "hi" }] });
     expect(response.status).toBe(422);
     const body: any = await response.json();
-    expect(body.error.code).toBe("m365_unavailable");
+    expect(body.error.code).toBe("m365_not_served");
     expect(body.error.message).toMatch(/Premium license/);
   });
 

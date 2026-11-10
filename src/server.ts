@@ -15,7 +15,7 @@ import type { AddressInfo } from "node:net";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
-import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel } from "./models.js";
+import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel, toolRouteFor } from "./models.js";
 import { describeToolSelection, selectLeanTools } from "./config.js";
 import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, TurnRejectedError, type TurnResult } from "./session.js";
 import { createPrivateAppender } from "./private-fs.js";
@@ -366,6 +366,8 @@ export interface TurnLogEntry {
   model: string;
   tone: string | null;
   agent: boolean;
+  /** How the tool block was worded, on a tool turn. */
+  framing?: "default" | "relay";
   tools: string[];
   reply?: string;
   toolCalls?: string[];
@@ -419,14 +421,17 @@ async function runTurn(
   const images = collectImages(body.messages, conversation.sentMessageCount);
   const note = effectiveTools.length > 0 && conversation.sentMessageCount > 0 ? conversation.note : undefined;
   conversation.note = undefined;
+  const route = toolRouteFor(model.tone);
   const prompt = buildTurnPrompt(body.messages, effectiveTools, conversation.sentMessageCount, {
+    framing: route.framing,
+    ...(route.sandbox ? { sandbox: route.sandbox } : {}),
     ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
     ...(note ? { note } : {}),
   });
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
   // actually needs tool instructions. Plain chat then reaches the tone's real model.
-  const agent = effectiveTools.length > 0 ? await context.agentId() : null;
+  const agent = effectiveTools.length > 0 && route.agent ? await context.agentId() : null;
 
   const abort = new AbortController();
   request.on("close", () => {
@@ -450,6 +455,7 @@ async function runTurn(
       model: model.id,
       tone: model.tone,
       agent: Boolean(agent),
+      ...(effectiveTools.length > 0 ? { framing: route.framing } : {}),
       tools: effectiveTools.map((tool) => tool.function.name),
       ...fields,
     });
@@ -491,7 +497,7 @@ async function runTurn(
     ) {
       recordTurn(result);
       const midTask = body.messages.some((message) => message.role === "tool");
-      result = await conversation.session.run(nudgeFor(midTask), turnOptions);
+      result = await conversation.session.run(nudgeFor(midTask, route.framing), turnOptions);
       recordTurn(result, { nudged: true });
     } else {
       recordTurn(result);
@@ -581,22 +587,22 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
       toolCount >= 12
         ? ` The request carried ${toolCount} tools; M365 disengages persistently above roughly 12. Reduce the toolset — see the lean profile in the opencode plugin.`
         : " M365 refused to engage with this prompt. The next request starts a fresh conversation with the whole history; if that disengages too, reduce the toolset or simplify the prompt.";
-    finishWithError(response, streaming, NON_RETRYABLE, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
+    refuse(response, streaming, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
     return;
   }
 
   if (error instanceof M365ThrottledError) {
-    finishWithError(response, streaming, NON_RETRYABLE, "m365_throttled", error.message);
+    refuse(response, streaming, "m365_throttled", error.message);
     return;
   }
 
   if (error instanceof M365UnavailableError) {
-    finishWithError(response, streaming, NON_RETRYABLE, "m365_unavailable", error.message);
+    refuse(response, streaming, "m365_not_served", error.message);
     return;
   }
 
   if (error instanceof TurnRejectedError) {
-    finishWithError(response, streaming, NON_RETRYABLE, "m365_turn_rejected", error.message);
+    refuse(response, streaming, "m365_turn_rejected", error.message);
     return;
   }
 
@@ -609,6 +615,24 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
   finishWithError(response, streaming, 502, "upstream_error", message);
 }
 
+/**
+ * Report an M365 refusal so that opencode does not retry it.
+ *
+ * opencode streams, so the refusal reaches it inside a stream that already answered
+ * 200, and it decides from the body alone (measured against 2.2.5's classifier, see
+ * test/opencode-retry.ts). It retries a code containing "unavailable", a message
+ * saying "try again" — which M365's own refusals do — and any mention of a rate
+ * limit. Type `invalid_request_error` switches off the "try again" rule; the rate
+ * limit wording is reworded, since that rule ignores the type.
+ */
+function refuse(response: ServerResponse, streaming: boolean, code: string, message: string): void {
+  const reworded = message
+    .replace(/rate increased too quickly/gi, "sent too fast")
+    .replace(/rate[-_\s]?limit/gi, "throttle")
+    .replace(/too[_\s]?many[_\s]?requests/gi, "too many turns");
+  finishWithError(response, streaming, NON_RETRYABLE, code, reworded, "invalid_request_error");
+}
+
 /** Report an error, in whichever shape the client is already reading. */
 function finishWithError(
   response: ServerResponse,
@@ -616,14 +640,15 @@ function finishWithError(
   status: number,
   code: string,
   message: string,
+  type: string = code,
 ): void {
   if (!streaming) {
-    sendError(response, status, code, message);
+    if (!response.writableEnded) sendJson(response, status, { error: { message, type, code } });
     return;
   }
   // Headers are already out on a stream; the error has to ride in the body.
   if (!response.writableEnded) {
-    response.write(`data: ${JSON.stringify({ error: { message, code, type: code } })}\n\n`);
+    response.write(`data: ${JSON.stringify({ error: { message, code, type } })}\n\n`);
     response.write(streamDone());
     response.end();
   }

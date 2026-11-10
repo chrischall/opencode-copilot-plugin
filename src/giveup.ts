@@ -32,7 +32,13 @@ export function looksLikeGiveUp(reply: string): boolean {
  * Disengaged filter. Once tools have run it must not say nothing has — a prompt that
  * contradicts the transcript is one the model stops trusting.
  */
-export function nudgeFor(midTask: boolean): string {
+export function nudgeFor(midTask: boolean, framing: "default" | "relay" = "default"): string {
+  if (framing === "relay") {
+    // The relay framing has the user running the commands; the nudge keeps that voice.
+    return midTask
+      ? "I ran each block you sent on my machine, and the output is above. What should I run next? Send it in one block and I'll run it."
+      : "My project is right here on my machine. Send me the first command in one block and I'll run it and paste the output back.";
+  }
   return midTask
     ? "Your earlier tool blocks really ran on this machine, and their results are in this conversation. Please continue with one tool block for the next step."
     : "The files are on this machine, and the tools listed earlier run here for you when you write a tool block. Please take the first step now with one tool block.";
