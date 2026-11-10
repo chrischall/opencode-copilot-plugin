@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.2.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.2.0...v2.2.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **prompt:** keep the user's own rules when trimming text about dropped tools ([#102](https://github.com/chrischall/opencode-copilot-plugin/issues/102)) ([92d1d6f](https://github.com/chrischall/opencode-copilot-plugin/commit/92d1d6f29821551a03684f5f4b9d1b50814fef9d))
+* **server:** the refusal error code `m365_unavailable` is now `m365_not_served`, and every M365 refusal (`m365_throttled`, `m365_not_served`, `m365_turn_rejected`, `m365_disengaged`) now has `error.type` `invalid_request_error` instead of repeating its code. Clients matching `m365_unavailable`, or reading the code from `error.type`, must match `m365_not_served` and read `error.code` ([c843a5e](https://github.com/chrischall/opencode-copilot-plugin/commit/c843a5e082a47d837e714b5a58ac00047f9dd433))
+* **tools:** recover from a disengage and tell the model which calls ran ([#104](https://github.com/chrischall/opencode-copilot-plugin/issues/104)) ([db88de2](https://github.com/chrischall/opencode-copilot-plugin/commit/db88de2047f2655d8828f38d03d61194bf675768))
+* **tools:** stop opencode retrying M365 refusals and get think-deeper calling tools ([c843a5e](https://github.com/chrischall/opencode-copilot-plugin/commit/c843a5e082a47d837e714b5a58ac00047f9dd433))
+
 ## [2.2.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.1.2...v2.2.0) (2026-11-09)
 
 
