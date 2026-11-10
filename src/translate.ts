@@ -13,7 +13,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import { buildToolPrompt, parseToolCalls, type ParsedToolCall, type ToolDef } from "./fenced.js";
+import { buildToolPrompt, parseToolCalls, renderToolCall, type ParsedToolCall, type ToolDef } from "./fenced.js";
 import type { TurnResult } from "./session.js";
 
 // --- request schema -------------------------------------------------------------
@@ -326,6 +326,8 @@ function trailingBlockStart(text: string): number {
 export interface PromptOptions {
   /** Replace the harness's prose system prompt with a lean one. */
   leanSystemPrompt?: string;
+  /** A line about how the last reply was handled, put ahead of this turn's messages. */
+  note?: string;
 }
 
 /**
@@ -368,6 +370,8 @@ export function buildTurnPrompt(
     for (const call of message.tool_calls ?? []) callsById.set(call.id, call.function);
   }
 
+  if (options.note) parts.push(options.note);
+
   for (const message of messages.slice(sentMessageCount)) {
     if (message.role === "system" || message.role === "developer") continue;
 
@@ -377,10 +381,13 @@ export function buildTurnPrompt(
     }
 
     if (message.role === "assistant") {
-      // The server already has its own replies; only surface an assistant turn the
-      // client synthesised.
+      // The server already has its own replies, so an assistant turn here is one the
+      // client synthesised, or history replayed into a fresh conversation. Show its
+      // calls as the fences the model writes, or the results that follow would
+      // answer calls nobody made.
       const text = contentOf(message);
       if (text) parts.push(text);
+      for (const call of message.tool_calls ?? []) parts.push(renderToolCall(call.function.name, call.function.arguments, tools));
       continue;
     }
 
@@ -411,7 +418,23 @@ function renderToolResult(
   if (summary) attributes.push(`command="${escapeAttribute(summary)}"`);
 
   const open = attributes.length > 0 ? `<tool_response ${attributes.join(" ")}>` : "<tool_response>";
-  return `${open}\n${contentOf(message)}\n</tool_response>`;
+  return `${open}\n${unwrapToolError(contentOf(message))}\n</tool_response>`;
+}
+
+/**
+ * opencode reports a failed tool as `{"error":{"type":"tool.execution","message":"…"},"content":[]}`,
+ * with the message's newlines escaped. Its messages are good ("Update the arguments
+ * and call the tool again"); the envelope just hides them.
+ */
+function unwrapToolError(content: string): string {
+  if (!content.startsWith("{\"error\"")) return content;
+  try {
+    const parsed = JSON.parse(content);
+    const message = parsed?.error?.message;
+    return typeof message === "string" ? `Error: ${message}` : content;
+  } catch {
+    return content;
+  }
 }
 
 /** The most identifying argument value, for the label. */

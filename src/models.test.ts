@@ -113,6 +113,18 @@ describe("model picker names", () => {
     }
   });
 
+  it("warns in the name that GPT-5.6 chat is unreliable at calling tools", () => {
+    // The reference project measured 7/30; ours 0/1. The name is the only place to say so.
+    for (const id of ["gpt-5.6", "gpt-5.6-quick"]) expect(resolveModel(id).name).toMatch(/unreliable tool calls/);
+    expect(resolveModel("quick").name).not.toMatch(/unreliable/);
+  });
+
+  it("lists GPT-5.6 chat after the default", () => {
+    const ids = MODELS.map((model) => model.id);
+    expect(ids.indexOf("gpt-5.6")).toBeGreaterThan(ids.indexOf("quick"));
+    expect(ids.indexOf("gpt-5.6-quick")).toBeGreaterThan(ids.indexOf("quick"));
+  });
+
   it("does not badge the local titler, which is neither", () => {
     expect(resolveModel(LOCAL_TITLE_MODEL).name).not.toMatch(/^(Work|Code) · /);
   });

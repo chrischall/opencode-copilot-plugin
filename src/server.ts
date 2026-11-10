@@ -134,6 +134,8 @@ export function generateApiKey(): string {
 
 interface Conversation extends ConversationState {
   session?: CopilotSession;
+  /** How the last reply was handled, when the model needs telling. Sent once, next turn. */
+  note?: string;
   /** Tail of this conversation's turn queue: one M365 session runs one turn at a time. */
   turn?: Promise<void>;
 }
@@ -415,8 +417,11 @@ async function runTurn(
 
   // Only the messages this turn carries: M365 already has any earlier image.
   const images = collectImages(body.messages, conversation.sentMessageCount);
+  const note = effectiveTools.length > 0 && conversation.sentMessageCount > 0 ? conversation.note : undefined;
+  conversation.note = undefined;
   const prompt = buildTurnPrompt(body.messages, effectiveTools, conversation.sentMessageCount, {
     ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
+    ...(note ? { note } : {}),
   });
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
@@ -495,6 +500,8 @@ async function runTurn(
     // +1 for the reply the client is about to append to its history: M365 already
     // has that turn, and sending it back would paste its own answer in as user input.
     conversation.sentMessageCount = body.messages.length + 1;
+    const allowMultiple = context.deps.allowMultiTool ?? false;
+    conversation.note = noteAbout(parseToolCalls(result.text, effectiveTools, { allowMultiple }));
 
     if (!streaming) {
       sendJson(response, 200, buildCompletion(result, { model: model.id, tools: effectiveTools, allowMultiple: context.deps.allowMultiTool ?? false }));
@@ -504,8 +511,32 @@ async function runTurn(
     finishStream(response, streamId, model.id, result, effectiveTools, canStreamText, context.deps.allowMultiTool ?? false);
   } catch (error) {
     logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
+    if (error instanceof DisengagedError) {
+      // A disengaged conversation stays disengaged. Drop it, so the next request
+      // opens a fresh one and replays the whole history into it.
+      conversation.session.reset();
+      conversation.sentMessageCount = 0;
+    }
     handleTurnFailure(response, error, streaming, effectiveTools.length);
   }
+}
+
+/**
+ * One line for the next turn when the last reply was not run as written. Without
+ * it the model assumes every block it wrote ran, and the reference project measured
+ * early "task already complete" endings falling from 9 in 56 runs to 0 in 70 once
+ * it was told.
+ */
+export function noteAbout(parsed: { toolCalls: { name: string }[]; skippedCalls: number; inventedResult: boolean }): string | undefined {
+  const first = parsed.toolCalls[0];
+  if (!first) return undefined;
+  const lines: string[] = [];
+  if (parsed.skippedCalls > 0) {
+    const others = parsed.skippedCalls === 1 ? "1 other" : `${parsed.skippedCalls} others`;
+    lines.push(`Only the first tool call in your last reply (${first.name}) ran; the ${others} did not run. Send any that are still needed, one per reply.`);
+  }
+  if (parsed.inventedResult) lines.push("The result you predicted after your call was set aside; the real one is below.");
+  return lines.length > 0 ? lines.join(" ") : undefined;
 }
 
 /** Emit the closing frames of a streamed turn. */
@@ -549,7 +580,7 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
     const hint =
       toolCount >= 12
         ? ` The request carried ${toolCount} tools; M365 disengages persistently above roughly 12. Reduce the toolset — see the lean profile in the opencode plugin.`
-        : " M365 refused to engage with this prompt. Retrying will not help; reduce the toolset or simplify the prompt.";
+        : " M365 refused to engage with this prompt. The next request starts a fresh conversation with the whole history; if that disengages too, reduce the toolset or simplify the prompt.";
     finishWithError(response, streaming, NON_RETRYABLE, "m365_disengaged", `M365 Copilot disengaged.${hint}`);
     return;
   }

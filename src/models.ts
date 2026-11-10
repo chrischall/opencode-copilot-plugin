@@ -68,8 +68,6 @@ export const MODELS: readonly ModelInfo[] = [
   // searches them server-side. The other models stay coding/web-only.
   m("work", "Ask your mail, Teams & files", "magic", false, true),
   m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
-  m("gpt-5.6", "GPT-5.6", "Gpt_5_6_Chat", false),
-  m("gpt-5.6-quick", "GPT-5.6 (Quick)", "Gpt_5_6_Chat", false),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
@@ -78,6 +76,11 @@ export const MODELS: readonly ModelInfo[] = [
   m("auto", "M365 Copilot (Auto)", "magic", false),
   m("quick", "GPT (Quick)", "Gpt_5_5_Chat", false),
   m("think-deeper", "GPT (Think Deeper)", "Gpt_5_5_Reasoning", true),
+  // Live, but it writes a tool call far less often than `quick`: the reference
+  // project measured 7/30, and our one run made none. Listed after the default and
+  // labelled, rather than dropped, because it is fine for plain chat.
+  m("gpt-5.6", "GPT-5.6 (unreliable tool calls)", "Gpt_5_6_Chat", false),
+  m("gpt-5.6-quick", "GPT-5.6 (Quick, unreliable tool calls)", "Gpt_5_6_Chat", false),
   m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),

@@ -686,6 +686,81 @@ describe("a give-up on a tool turn", () => {
   });
 });
 
+describe("after a disengage", () => {
+  const send = (url: string, messages: unknown[]) =>
+    authedFetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", [SESSION_ID_HEADER]: "ses_d" },
+      body: JSON.stringify({ messages, tools: [bashTool] }),
+    });
+  const conversationIds = () => stub!.connections.map((c) => new URL(c.url, "http://x").searchParams.get("ConversationId"));
+
+  it("starts the next request in a fresh conversation with the whole history", async () => {
+    let turn = 0;
+    stub = await startStubCopilot({
+      respond: () => (turn++ === 1 ? [disengaged(), completion()] : [streamItem("```bash\nls\n```"), completion()]),
+    });
+    const { url } = await start();
+    const opener = { role: "user", content: "UNIQUEOPENER list the files" };
+    const call = { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } }] };
+    const result = { role: "tool", tool_call_id: "c1", content: "a.py" };
+
+    await send(url, [opener]);
+    expect((await send(url, [opener, call, result])).status).toBe(422);
+    await send(url, [opener, call, result]);
+
+    const ids = conversationIds();
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[1]);
+    const replay = stub.last().frames.find((f) => f.type === 4).arguments[0].message.text;
+    expect(replay).toContain("UNIQUEOPENER");
+    expect(replay).toContain("```bash\nls\n```");
+    expect(replay).toContain("a.py");
+  });
+
+  it("says the next request starts over", async () => {
+    stub = await startStubCopilot({ respond: () => [disengaged(), completion()] });
+    const { url } = await start();
+    const body: any = await (await send(url, [{ role: "user", content: "hi" }])).json();
+    expect(body.error.message).toMatch(/fresh conversation/);
+  });
+});
+
+describe("telling the model what ran", () => {
+  const tool = { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "bash", arguments: '{"command":"ls"}' } }] };
+  const conversation = (stubReply: string) => async () => {
+    let turn = 0;
+    stub = await startStubCopilot({ respond: () => [streamItem(turn++ === 0 ? stubReply : "done"), completion()] });
+    const { url } = await start();
+    const send = (messages: unknown[]) =>
+      authedFetch(`${url}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", [SESSION_ID_HEADER]: "ses_n" },
+        body: JSON.stringify({ messages, tools: [bashTool] }),
+      });
+    const opener = { role: "user", content: "go" };
+    await send([opener]);
+    await send([opener, tool, { role: "tool", tool_call_id: "c1", content: "a.py" }]);
+    return stub.last().frames.find((f) => f.type === 4).arguments[0].message.text as string;
+  };
+
+  it("says which calls in the last reply did not run", async () => {
+    const text = await conversation("```bash\nls\n```\n\n```bash\npwd\n```\n\n```bash\nwhoami\n```")();
+    expect(text).toMatch(/only the first .*ran/i);
+    expect(text).toMatch(/2 others? did not run/i);
+  });
+
+  it("says a predicted result was set aside", async () => {
+    const text = await conversation("```bash\nls\n```\n<tool_response>\nb.py\n</tool_response>")();
+    expect(text).toMatch(/predicted/i);
+  });
+
+  it("adds nothing after a clean single call", async () => {
+    const text = await conversation("```bash\nls\n```")();
+    expect(text).not.toMatch(/did not run|predicted/i);
+  });
+});
+
 describe("the turn log", () => {
   it("records what M365 sent back and what was parsed out of it", async () => {
     stub = await startStubCopilot({

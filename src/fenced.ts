@@ -47,6 +47,10 @@ export interface ParseResult {
   toolCalls: ParsedToolCall[];
   /** Prose to return to the client. Empty when the turn produced a tool call. */
   text: string;
+  /** Tool blocks after the first that will not run, because only one call is kept. */
+  skippedCalls: number;
+  /** The reply went on to write a tool result of its own, which was cut. */
+  inventedResult: boolean;
 }
 
 /** Info strings we accept as "this is a shell block", beyond the tool's own name. */
@@ -265,6 +269,43 @@ function placeholderFor(name: string, tool: ToolDef): string {
   return `<${type}>${required ? "" : "   (optional)"}`;
 }
 
+/**
+ * Write a call the client already ran back as the fence the model would have
+ * written, so a history replayed into a fresh conversation shows the call next to
+ * its result. The inverse of `parseFenceBody`; falls back to JSON when a value
+ * cannot be written as a header line.
+ */
+export function renderToolCall(name: string, rawArguments: string, tools: readonly ToolDef[]): string {
+  const tool = tools.find((candidate) => candidate.function.name === name);
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(rawArguments || "{}");
+  } catch {
+    args = {};
+  }
+  const json = () => "```" + name + "\n" + (rawArguments || "{}") + "\n```";
+  if (!tool || typeof args !== "object" || args === null) return json();
+
+  const shape = shapeOf(tool);
+  const lines: string[] = [];
+  for (const key of Object.keys(args)) {
+    if (key === shape.bodyParam || shape.editPair?.includes(key)) continue;
+    const value = args[key];
+    if (value === undefined || value === null) continue;
+    if (typeof value === "object" || String(value).includes("\n")) return json();
+    lines.push(`${key}: ${String(value)}`);
+  }
+  if (shape.editPair) {
+    const [from, to] = shape.editPair;
+    if (typeof args[from] === "string" && typeof args[to] === "string") {
+      lines.push(SEARCH_MARKER, args[from] as string, DIVIDER_MARKER, args[to] as string, REPLACE_MARKER);
+    }
+  } else if (shape.bodyParam && typeof args[shape.bodyParam] === "string") {
+    lines.push(args[shape.bodyParam] as string);
+  }
+  return "```" + name + "\n" + lines.join("\n") + "\n```";
+}
+
 // --- parsing --------------------------------------------------------------------
 
 interface Fence {
@@ -402,8 +443,9 @@ export function parseToolCalls(
   options: ParseOptions = {},
 ): ParseResult {
   const cleaned = stripInventedJson(source.replace(/\r\n?/g, "\n"));
+  const none = (text: string): ParseResult => ({ toolCalls: [], text, skippedCalls: 0, inventedResult: false });
 
-  if (tools.length === 0) return { toolCalls: [], text: cleaned };
+  if (tools.length === 0) return none(cleaned);
 
   const shell = findShellTool(tools);
   const byName = new Map(tools.map((tool) => [tool.function.name.toLowerCase(), tool]));
@@ -421,25 +463,30 @@ export function parseToolCalls(
 
   // A reply that opens with a tool block is an action, whatever prose follows it.
   const opensWithAction = fences.length > 0 && actionable.slice(0, fences[0]!.start).trim() === "" && Boolean(toolFor(fences[0]!));
-  if (!opensWithAction && isProseDocument(actionable)) return { toolCalls: [], text: cleaned };
+  if (!opensWithAction && isProseDocument(actionable)) return none(cleaned);
 
   const calls: ParsedToolCall[] = [];
   const consumed: Fence[] = [];
 
+  let skippedCalls = 0;
+
   for (const fence of fences) {
     const tool = toolFor(fence);
     if (!tool) continue;
+    if (calls.length > 0 && !options.allowMultiple) {
+      skippedCalls += 1;
+      continue;
+    }
 
     calls.push({ name: tool.function.name, arguments: parseFenceBody(fence.body, tool) });
     consumed.push(fence);
-    if (!options.allowMultiple) break;
   }
 
-  if (calls.length === 0) return { toolCalls: [], text: cleaned };
+  if (calls.length === 0) return none(cleaned);
 
   // Mixed output: when the model both acted and narrated, the client gets the action.
   // The narration is logged upstream, not returned.
-  return { toolCalls: calls, text: "" };
+  return { toolCalls: calls, text: "", skippedCalls, inventedResult: invented !== -1 };
 }
 
 /** Names models use for a file path, compared without case or underscores. */
