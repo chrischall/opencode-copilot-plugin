@@ -120,7 +120,7 @@ deleted — another host may be mid-conversation with it.
 Without Copilot Studio access the plugin still works, just less reliably; it logs a
 warning and carries on.
 
-Three things keep a turn on track:
+Four things keep a turn on track:
 
 - **A tolerant parser.** M365 writes calls loosely: the command as a `command:` header,
   `filePath:` for `path`, quoted values, a copied `$ ` prompt, prose or an invented
@@ -132,6 +132,11 @@ Three things keep a turn on track:
 - **A pinned backend.** Every turn's connection carries
   `X-RoutingParameter-SessionKey`, which the reference project found stops long
   sessions running on a forked copy of the conversation.
+- **Telling the model what ran.** Only the first tool block in a reply runs. When a
+  reply holds more, or goes on to predict its own result, the next turn starts with
+  one line saying so, so the model does not assume the rest ran. opencode's tool
+  errors arrive as plain text (`Error: …`) rather than a JSON envelope. In the 237
+  `quick` turns measured so far, no reply needed the note.
 
 Measured on one tenant on 2026-11-09 (`m365/quick`, opencode 2.2.5, 36 conversations,
 alternating builds), with and without the prompt trimming, nudge and routing header.
@@ -223,7 +228,7 @@ extends it. The error `code` says which refusal it was:
 | `m365_throttled` | The account is throttled. Wait for a lull. |
 | `m365_unavailable` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone |
 | `m365_turn_rejected` | The server refused the request outright, typically a retired tone |
-| `m365_disengaged` | M365's filter refused to engage with the prompt |
+| `m365_disengaged` | M365's filter refused to engage with the prompt. A disengaged conversation stays that way, so the proxy drops it: the next request opens a fresh conversation and replays the whole history |
 
 Set `M365_TURN_LOG=/path/to/turns.jsonl` before starting opencode to record one line
 per M365 turn: the raw reply, the tool calls parsed from it, and M365's diagnostics
@@ -255,7 +260,7 @@ task per run; small samples):
 | `m365/quick` | 5/5 |
 | `m365/m365-copilot` | 1/1 |
 | `m365/gpt-5.5` (same tone as `quick`) | 0/1 |
-| `m365/gpt-5.6` | 0/1 |
+| `m365/gpt-5.6` | 0/1 (the reference project: 7/30), so its picker name says "unreliable tool calls" |
 | `m365/gpt-5.5-think-deeper` | 0/3 — says it has no file tool |
 
 The reference project's README reports 100% tool compliance for `gpt-5.5-think-deeper`;

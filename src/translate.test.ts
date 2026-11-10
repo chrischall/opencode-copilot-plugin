@@ -521,3 +521,44 @@ describe("streaming", () => {
     expect(parsed.choices[0].finish_reason).toBe("stop");
   });
 });
+
+describe("replaying history into a fresh conversation", () => {
+  const callMessage = {
+    role: "assistant" as const,
+    content: null,
+    tool_calls: [{ id: "c1", type: "function" as const, function: { name: "bash", arguments: '{"command":"ls -la"}' } }],
+  };
+
+  it("shows a past tool call as the fence the model would have written", () => {
+    // Without it, a replayed history shows results that no call produced.
+    const messages = [user("what is in the repo?"), callMessage, { role: "tool" as const, tool_call_id: "c1", content: "README.md" }];
+    const prompt = buildTurnPrompt(messages, [bashTool], 0);
+    expect(prompt).toContain("```bash\nls -la\n```");
+    expect(prompt.indexOf("```bash\nls -la")).toBeLessThan(prompt.indexOf("README.md"));
+  });
+});
+
+describe("tool results", () => {
+  it("unwraps opencode's error envelope into plain text", () => {
+    const envelope = JSON.stringify({
+      error: { type: "tool.execution", message: "File not found: a.py\nUpdate the arguments and call the tool again" },
+      content: [],
+    });
+    const messages = [user("x"), { role: "tool" as const, tool_call_id: "c1", content: envelope }];
+    const prompt = buildTurnPrompt(messages, [bashTool], 1);
+    expect(prompt).toContain("Error: File not found: a.py\nUpdate the arguments and call the tool again");
+    expect(prompt).not.toContain('"tool.execution"');
+  });
+
+  it("leaves ordinary JSON output alone", () => {
+    const messages = [user("x"), { role: "tool" as const, tool_call_id: "c1", content: '{"error":"none","ok":true}' }];
+    expect(buildTurnPrompt(messages, [bashTool], 1)).toContain('{"error":"none","ok":true}');
+  });
+
+  it("puts a note about the last reply ahead of the result", () => {
+    const messages = [user("x"), { role: "tool" as const, tool_call_id: "c1", content: "out" }];
+    const prompt = buildTurnPrompt(messages, [bashTool], 1, { note: "Only the first call ran." });
+    expect(prompt).toContain("Only the first call ran.");
+    expect(prompt.indexOf("Only the first call ran.")).toBeLessThan(prompt.indexOf("<tool_response"));
+  });
+});

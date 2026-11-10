@@ -4,7 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseToolCalls, type ToolDef } from "./fenced.js";
+import { parseToolCalls, renderToolCall, type ToolDef } from "./fenced.js";
 
 // The lean toolset from a captured opencode 2.2.5 request.
 const tools: ToolDef[] = JSON.parse(
@@ -136,5 +136,41 @@ describe("whole replies", () => {
       "Here is a README you could use. It covers installation, configuration and the common commands people ask about.\n\n" +
       `${T}bash\nnpm install\n${T}\n\nThen configure it:\n\n${T}bash\nnpm run setup\n${T}`;
     expect(parseToolCalls(reply, tools).toolCalls).toHaveLength(0);
+  });
+});
+
+describe("what the parser set aside", () => {
+  it("counts the calls after the first that will not run", () => {
+    const reply = `${T}read\npath: a.py\n${T}\n\n${T}read\npath: b.py\n${T}\n\n${T}bash\npython3 t.py\n${T}`;
+    const result = parseToolCalls(reply, tools);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.skippedCalls).toBe(2);
+  });
+
+  it("notes a tool result the model wrote for itself", () => {
+    const reply = `${T}bash\ncat a.py\n${T}\n<tool_response>\nprint(1)\n</tool_response>`;
+    expect(parseToolCalls(reply, tools).inventedResult).toBe(true);
+  });
+
+  it("reports nothing set aside for a single clean call", () => {
+    const result = parseToolCalls(`${T}read\npath: a.py\n${T}`, tools);
+    expect(result.skippedCalls).toBe(0);
+    expect(result.inventedResult).toBe(false);
+  });
+});
+
+describe("rendering a past call back into a fence", () => {
+  it.each([
+    ["shell", { command: "python3 test_calc.py", workdir: "/tmp/w" }],
+    ["read", { path: "calc.py", offset: 3 }],
+    ["edit", { path: "s.py", oldString: "PORT = 8080", newString: "PORT = 9090" }],
+    ["write", { path: "a.txt", content: "line one\nline two" }],
+  ])("writes a %s call the parser reads back as the same call", (name, args) => {
+    const fence = renderToolCall(name, JSON.stringify(args), tools);
+    expect(call(fence)).toEqual({ name, args });
+  });
+
+  it("falls back to plain JSON for a tool it does not know", () => {
+    expect(renderToolCall("todo", '{"x":1}', tools)).toContain('{"x":1}');
   });
 });
