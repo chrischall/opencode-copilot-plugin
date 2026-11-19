@@ -14,6 +14,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { buildToolPrompt, parseToolCalls, renderToolCall, type ParsedToolCall, type ToolDef } from "./fenced.js";
+import { stripCodeModeSection } from "./codemode.js";
 import type { TurnResult } from "./session.js";
 
 // --- request schema -------------------------------------------------------------
@@ -216,7 +217,7 @@ export function condenseSystemPrompt(
     // opencode 2's Code Mode section says the listed tools only work inside `execute`.
     // Lean mode removes `execute`, so the section told the model its tools were unusable.
     if (!toolNames.has("execute")) {
-      text = text.replace(/^# Code Mode\n[\s\S]*?(?=^# |^Skills provide |^<[a-z_]+>|(?![\s\S]))/m, "");
+      text = stripCodeModeSection(text);
       text = dropLines(text, /`execute`/);
     }
     if (!toolNames.has("skill")) text = dropLines(text, /^Skills provide |\bskill tool\b|invoke a skill directly/);
