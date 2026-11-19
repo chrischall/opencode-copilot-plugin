@@ -47,6 +47,8 @@ import {
   EmptyInternalError,
   M365ThrottledError,
   M365UnavailableError,
+  PremiumLicenceRequiredError,
+  PriorityAccessExhaustedError,
   TurnRejectedError,
   type TurnResult,
 } from "./session.js";
@@ -72,6 +74,7 @@ import { collectImages } from "./image.js";
 import { firstFenceBody, parseToolCalls } from "./fenced.js";
 import { looksLikeGiveUp, nudgeFor } from "./giveup.js";
 import { createLogger } from "./log.js";
+import { SessionMetricsStore } from "./metrics.js";
 
 const log = createLogger("server");
 
@@ -154,6 +157,11 @@ export interface ServerDeps {
   allowedOrigins?: readonly string[];
   /** Largest request body accepted, in bytes. */
   maxBodyBytes?: number;
+  /**
+   * Where per-session metrics go (model, quota, context, allowances), keyed by the
+   * {@link SESSION_ID_HEADER}. A fresh one is made when this is omitted.
+   */
+  metrics?: SessionMetricsStore;
 }
 
 export interface ProxyHandle {
@@ -161,6 +169,8 @@ export interface ProxyHandle {
   port: number;
   /** The bearer secret a client must send. */
   apiKey: string;
+  /** Per-session metrics for opencode's UI, served by the plugin over RPC. */
+  metrics: SessionMetricsStore;
   close(): Promise<void>;
 }
 
@@ -207,6 +217,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     );
   }
   const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const metrics = deps.metrics ?? new SessionMetricsStore();
 
   // Resolved once, then reused: provisioning an agent is slow and only the first
   // tool request should pay for it. A failure is cached only when it is permanent
@@ -237,7 +248,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
 
   const portOf = () => (server.address() as AddressInfo).port;
   const server = createServer((request, response) => {
-    handle(request, response, { deps, pool, agentId, agentRoutes, apiKey, maxBodyBytes, port: portOf() }).catch((error) => {
+    handle(request, response, { deps, pool, agentId, agentRoutes, apiKey, maxBodyBytes, metrics, port: portOf() }).catch((error) => {
       log.error("unhandled request failure", String(error));
       sendError(response, 500, "internal_error", String(error));
     });
@@ -254,6 +265,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     url: `http://${urlHost}:${port}`,
     port,
     apiKey,
+    metrics,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();
@@ -269,6 +281,7 @@ interface Context {
   agentRoutes: AgentRouteMemory;
   apiKey: string;
   maxBodyBytes: number;
+  metrics: SessionMetricsStore;
   port: number;
 }
 
@@ -413,8 +426,7 @@ async function handleChatCompletion(
     return;
   }
 
-  const sessionHeader = request.headers[SESSION_ID_HEADER];
-  const sessionId = typeof sessionHeader === "string" && sessionHeader !== "" ? sessionHeader : undefined;
+  const sessionId = sessionIdOf(request);
   const conversation = context.pool.resolve(body.messages, sessionId ? { sessionId } : {}) as Conversation;
 
   // Serialise turns per conversation: two overlapping requests on one CopilotSession
@@ -429,6 +441,12 @@ async function handleChatCompletion(
   } finally {
     release();
   }
+}
+
+/** opencode's session id, from {@link SESSION_ID_HEADER}, when the request names one. */
+function sessionIdOf(request: IncomingMessage): string | undefined {
+  const header = request.headers[SESSION_ID_HEADER];
+  return typeof header === "string" && header !== "" ? header : undefined;
 }
 
 export interface TurnLogEntry {
@@ -557,7 +575,18 @@ async function runTurn(
     ...(model.scenario === "paid" ? { paid: true } : {}),
     signal: abort.signal,
   };
-  const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) =>
+  // The whole context opencode sent, as it sent it: its context meter wants that size.
+  const promptTokens = estimatePromptTokens(body.messages, body.tools);
+  const sessionId = sessionIdOf(request);
+  const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) => {
+    if (sessionId) {
+      context.metrics.recordTurn(sessionId, {
+        model,
+        contextTokens: promptTokens,
+        ...(result.throttle ? { throttle: result.throttle } : {}),
+        ...(result.metering ? { metering: result.metering } : {}),
+      });
+    }
     logTurn({
       reply: result.text,
       toolCalls: parseToolCalls(result.text, effectiveTools).toolCalls.map((call) => call.name),
@@ -568,6 +597,7 @@ async function runTurn(
       ...(result.resultValue ? { resultValue: result.resultValue } : {}),
       ...extra,
     });
+  };
 
   const session = conversation.session;
   const firstTurn = () =>
@@ -681,8 +711,6 @@ async function runTurn(
       : parseToolCalls(result.text, clientTools, { allowMultiple });
     conversation.note = noteAbout(parsed);
 
-    // The whole context opencode sent, as it sent it: its context meter wants that size.
-    const promptTokens = estimatePromptTokens(body.messages, body.tools);
     if (!streaming) {
       sendJson(
         response,
@@ -703,6 +731,9 @@ async function runTurn(
     });
   } catch (error) {
     logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
+    const refusal =
+      error instanceof PriorityAccessExhaustedError ? "allowance" : error instanceof PremiumLicenceRequiredError ? "licence" : undefined;
+    if (sessionId && refusal) context.metrics.recordRefusal(sessionId, { model, reason: refusal, message: (error as Error).message });
     if (error instanceof DisengagedError) {
       // A disengaged conversation stays disengaged. Drop it, so the next request
       // opens a fresh one and replays the whole history into it.

@@ -327,6 +327,91 @@ describe("chat completions", () => {
   });
 });
 
+describe("per-session metrics", () => {
+  const postAs = (url: string, sessionId: string | undefined, body: unknown) =>
+    authedFetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(sessionId ? { [SESSION_ID_HEADER]: sessionId } : {}) },
+      body: JSON.stringify(body),
+    });
+
+  it("records the session's model, quota, context, turns and allowances", async () => {
+    stub = await startStubCopilot({
+      respond: () => [throttling(12, 600, { ClaudeOpusQueryDaily: 31, ClaudeOpusQuery75: 70, DeepResearch: 100 }), botMessage("ok"), completion()],
+    });
+    const { url } = await start();
+    const messages = [{ role: "user", content: "x".repeat(400) }];
+    expect((await postAs(url, "ses_a", { model: "m365/claude-opus", messages })).status).toBe(200);
+    expect(proxy!.metrics.get("ses_a")).toMatchObject({
+      sessionID: "ses_a",
+      model: { id: "claude-opus" },
+      conversation: { used: 12, max: 600 },
+      contextTokens: 100,
+      turns: 1,
+      creditTurns: 0,
+      allowances: { labels: ["Opus 5.5: 31/40 left today, 70/75 left this week"] },
+    });
+  });
+
+  it("counts the turns on a credit-billed model", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, "ses_c", { model: "claude-fable", messages: [{ role: "user", content: "hi" }] });
+    await postAs(url, "ses_c", {
+      model: "claude-fable",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "again" },
+      ],
+    });
+    expect(proxy!.metrics.get("ses_c")).toMatchObject({ turns: 2, creditTurns: 2 });
+  });
+
+  it("records the streamed path too", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(5), delta("abcd"), streamItem("abcd"), completion()] });
+    const { url } = await start();
+    await (await postAs(url, "ses_s", { stream: true, messages: [{ role: "user", content: "hi" }] })).text();
+    expect(proxy!.metrics.get("ses_s")).toMatchObject({ turns: 1, conversation: { used: 5, max: 600 } });
+  });
+
+  it("keeps the last refusal: a used-up allowance, then a missing licence", async () => {
+    let refusal: "allowance" | "licence" = "allowance";
+    stub = await startStubCopilot({
+      respond: () =>
+        refusal === "allowance"
+          ? [{ type: 2, item: { messages: [], result: { value: "OutOfCredits", message: "You've used your available priority access to the Opus model for today.", creditScenario: "TotalTurn" } } }, completion()]
+          : [{ type: 2, item: { messages: [], result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "no licence" } } }, completion()],
+    });
+    const { url } = await start();
+    expect((await postAs(url, "ses_r", { model: "claude-opus", messages: [{ role: "user", content: "hi" }] })).status).toBe(422);
+    expect(proxy!.metrics.get("ses_r")).toMatchObject({ turns: 0, lastRefusal: { reason: "allowance" } });
+    expect(proxy!.metrics.get("ses_r")?.lastRefusal?.message).toMatch(/daily priority-access allowance/);
+
+    refusal = "licence";
+    await postAs(url, "ses_r", { model: "claude-opus", messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics.get("ses_r")?.lastRefusal?.reason).toBe("licence");
+  });
+
+  it("records nothing for a request that names no session, or for the local titler", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, undefined, { messages: [{ role: "user", content: "hi" }] });
+    await postAs(url, "ses_t", { model: LOCAL_TITLE_MODEL, messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics.size).toBe(0);
+  });
+
+  it("uses a store the caller hands in", async () => {
+    const { SessionMetricsStore } = await import("./metrics.js");
+    const metrics = new SessionMetricsStore();
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start({ metrics });
+    await postAs(url, "ses_x", { messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics).toBe(metrics);
+    expect(metrics.get("ses_x")?.turns).toBe(1);
+  });
+});
+
 describe("grounded models carry no tools", () => {
   const chatArg = (server: StubServer) => server.last().frames.find((f) => f.type === 4).arguments[0];
 

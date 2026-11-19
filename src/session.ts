@@ -200,6 +200,12 @@ export interface TurnResult {
   text: string;
   /** Per-conversation quota, when the server reported it. */
   throttle?: ThrottleState;
+  /**
+   * The account's priority-access allowances, remaining turns by M365's key
+   * (`ClaudeOpusQueryDaily`, `ClaudeOpusQuery75`, ...). Only paid-scenario turns carry
+   * them; an included-scenario turn leaves this out.
+   */
+  metering?: Record<string, number>;
   /** Which backend answered — `DeepLeo` is the reasoning pipeline. */
   contentOrigin?: string;
   /** Server-side turn count for this conversation. */
@@ -614,12 +620,7 @@ export class CopilotSession {
       turn.onDelta?.(deltaChunk);
     }
 
-    if (argument?.throttling) {
-      result.throttle = {
-        current: argument.throttling.numUserMessagesInConversation,
-        max: argument.throttling.maxNumUserMessagesInConversation,
-      };
-    }
+    if (argument?.throttling) absorbThrottling(argument.throttling, result);
 
     for (const message of argument?.messages ?? []) {
       if (message?.author !== "bot") continue;
@@ -637,16 +638,27 @@ export class CopilotSession {
     if (!item) return;
     if (typeof item.result?.value === "string") result.resultValue = item.result.value;
     if (typeof item.result?.errorCode === "string") result.errorCode = item.result.errorCode;
-    if (item.throttling) {
-      result.throttle = {
-        current: item.throttling.numUserMessagesInConversation,
-        max: item.throttling.maxNumUserMessagesInConversation,
-      };
-    }
+    if (item.throttling) absorbThrottling(item.throttling, result);
     for (const message of item.messages ?? []) {
       if (message?.author === "bot" && !message.messageType) absorbMetadata(message, result);
     }
   }
+}
+
+/** The quota a `throttling` object reports, and the allowances when it has `metering`. */
+function absorbThrottling(throttling: any, result: TurnResult): void {
+  result.throttle = {
+    current: throttling.numUserMessagesInConversation,
+    max: throttling.maxNumUserMessagesInConversation,
+  };
+  const metering = throttling.metering;
+  if (!metering || typeof metering !== "object") return;
+  const remaining: Record<string, number> = {};
+  for (const [key, value] of Object.entries(metering)) {
+    const allowance = (value as { remainingAllowance?: unknown } | null)?.remainingAllowance;
+    if (typeof allowance === "number" && Number.isFinite(allowance)) remaining[key] = allowance;
+  }
+  if (Object.keys(remaining).length > 0) result.metering = remaining;
 }
 
 /** What the chat frame carries from the caller: the prompt and its uploaded images. */

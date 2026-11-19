@@ -12,6 +12,7 @@ import { getOrCreateAgent } from "./agent.js";
 import { createTokenClient } from "./auth.js";
 import { resolveOptions, type PluginOptions } from "./config.js";
 import { createLogger } from "./log.js";
+import type { SessionMetricsStore } from "./metrics.js";
 import { startServer } from "./server.js";
 
 const log = createLogger("plugin");
@@ -50,6 +51,11 @@ export interface M365Runtime {
   /** The bearer secret that surface demands, ready to hand over as the `apiKey`. */
   apiKey: string;
   options: PluginOptions;
+  /**
+   * The in-process proxy's per-session metrics. Absent when attached to an external
+   * proxy (`baseUrl`): that one keeps its own, out of this process's reach.
+   */
+  metrics?: SessionMetricsStore;
   /** Stops the proxy, if this runtime is the one that started it. */
   close(): Promise<void>;
 }
@@ -91,5 +97,5 @@ export async function startRuntime(rawOptions?: Record<string, unknown>): Promis
   });
 
   log.info(`M365 Copilot proxy listening on ${proxy.url}`);
-  return { baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey, options, close: () => proxy.close() };
+  return { baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey, options, metrics: proxy.metrics, close: () => proxy.close() };
 }

@@ -20,6 +20,7 @@ import type { Plugin } from "@opencode/plugin";
 import { PROVIDER_ID, buildModelInfos, buildProviderInfo } from "./config.js";
 import { DEFAULT_MODEL, canonicalModelId, isLocalModel } from "./models.js";
 import { createLogger } from "./log.js";
+import { METRICS_RPC, metricsRpcHandlers } from "./metrics.js";
 import { startRuntime } from "./runtime.js";
 import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER } from "./server.js";
 
@@ -90,7 +91,33 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
     event.headers[AUX_REQUEST_KIND_HEADER] = event.kind;
   });
 
+  const metricsRpc = await serveMetrics(ctx, runtime);
+
   log.info(`Microsoft 365 Copilot ready at ${runtime.baseUrl}`);
 
-  return () => runtime.close();
+  return async () => {
+    await metricsRpc?.dispose().catch(() => {});
+    await runtime.close();
+  };
 };
+
+/**
+ * Serve the proxy's per-session metrics to the TUI over opencode's RPC domain, and
+ * announce each change as an `updated` event. Best effort: a failure here is logged
+ * and the plugin loads without it, because opencode swallows a plugin whose setup
+ * throws, and losing the provider over a status line would be the worse outcome.
+ */
+async function serveMetrics(ctx: Plugin.Context, runtime: Awaited<ReturnType<typeof startRuntime>>) {
+  const rpc = (ctx as { rpc?: Plugin.Context["rpc"] }).rpc;
+  if (!rpc?.register) return undefined;
+  try {
+    const registration = await rpc.register(METRICS_RPC, metricsRpcHandlers(() => runtime.metrics));
+    runtime.metrics?.onChange((sessionID) => {
+      registration.events.emit("updated", { sessionID }).catch(() => {});
+    });
+    return registration;
+  } catch (error) {
+    log.warn("could not register the metrics RPC; the TUI status will stay empty", String(error));
+    return undefined;
+  }
+}
