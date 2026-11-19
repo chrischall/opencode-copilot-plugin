@@ -348,11 +348,22 @@ on the real model — they are real work, and only titling opens the extra conve
 
 Models are selected by an M365 *tone*, not a model id. `m365/quick` is the default.
 
-Each model is listed once. Older short ids (`auto`, `claude`, `gpt-5.4`, `gpt-5.3` and
-`gpt-5.2`) used to appear alongside their descriptive twins (`m365-copilot`, `claude-sonnet`,
-`gpt-5.4-think-deeper`, `gpt-5.3-quick`, `gpt-5.2-quick`), so the picker showed them twice.
-They are no longer listed, but they are still accepted, with or without the `m365/`
-prefix, so a saved config that names one keeps working.
+Each model is listed once. Some ids used to appear alongside a twin that selects the same
+tone, so the picker showed the model twice. They are no longer listed, but they are still
+accepted, with or without the `m365/` prefix:
+
+| Accepted, not listed | Listed as |
+|---|---|
+| `auto` | `m365-copilot` |
+| `claude` | `claude-sonnet` |
+| `gpt-5.5`, `gpt-5.5-quick` | `quick` |
+| `gpt-5.6` | `gpt-5.6-quick` |
+| `gpt-5.4` | `gpt-5.4-think-deeper` |
+| `gpt-5.3` | `gpt-5.3-quick` |
+| `gpt-5.2` | `gpt-5.2-quick` |
+
+A saved default model that names one of these is moved to the listed id at startup, since
+opencode only loads a default its catalogue lists.
 
 Tool-calling on a live tenant (2026-11-09, one non-Premium account, a single file-read
 task per run; small samples):
@@ -361,7 +372,7 @@ task per run; small samples):
 |---|---|
 | `m365/quick` | 5/5 |
 | `m365/m365-copilot` | 1/1 |
-| `m365/gpt-5.5` (same tone as `quick`) | 0/1 |
+| `m365/gpt-5.5` (same tone as `quick`, now an alias of it) | 0/1 |
 | `m365/gpt-5.6` | 0/1 (the reference project: 7/30), so its picker name says "unreliable tool calls" |
 | `m365/gpt-5.5-think-deeper` | 0/3 — said it had no file tool; 4/4 with the relay framing, below |
 

@@ -18,7 +18,7 @@
 
 import type { Plugin } from "@opencode/plugin";
 import { PROVIDER_ID, buildModelInfos, buildProviderInfo } from "./config.js";
-import { DEFAULT_MODEL, isLocalModel } from "./models.js";
+import { DEFAULT_MODEL, canonicalModelId, isLocalModel } from "./models.js";
 import { createLogger } from "./log.js";
 import { startRuntime } from "./runtime.js";
 import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER } from "./server.js";
@@ -55,13 +55,20 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
     editor.add({ info, models } as never);
   });
 
-  if (runtime.options.setDefaultModel) {
-    await ctx.model.transform((editor) => {
-      // Re-checked on every replay: the user's own choice must keep winning.
-      if (editor.default.get()) return;
-      editor.default.set(PROVIDER_ID as never, DEFAULT_MODEL as never);
-    });
-  }
+  await ctx.model.transform((editor) => {
+    const current = editor.default.get();
+    // A saved default that names an id we now only accept as an alias (`m365/auto`,
+    // `m365/gpt-5.5`) is not in the catalogue, so opencode could not load it. Move it
+    // to the canonical id: the same model, so the user's choice still stands.
+    if (current?.providerID === PROVIDER_ID) {
+      const canonical = canonicalModelId(String(current.modelID));
+      if (canonical !== current.modelID) editor.default.set(PROVIDER_ID as never, canonical as never);
+      return;
+    }
+    // Re-checked on every replay: the user's own choice must keep winning.
+    if (current || !runtime.options.setDefaultModel) return;
+    editor.default.set(PROVIDER_ID as never, DEFAULT_MODEL as never);
+  });
 
   // opencode 2 has no `small_model` to point at the local titler, and the title
   // request's model is read-only here. Its headers are not, so we mark the kind and

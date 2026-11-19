@@ -119,12 +119,12 @@ describe("model picker names", () => {
   it("warns in the name that GPT-5.6 chat is unreliable at calling tools", () => {
     // The reference project measured 7/30; ours 0/1. The name is the only place to say so.
     for (const id of ["gpt-5.6", "gpt-5.6-quick"]) expect(resolveModel(id).name).toMatch(/unreliable tool calls/);
+    expect(resolveModel("gpt-5.6-quick").name).toContain("GPT-5.6 (Quick");
     expect(resolveModel("quick").name).not.toMatch(/unreliable/);
   });
 
   it("lists GPT-5.6 chat after the default", () => {
     const ids = MODELS.map((model) => model.id);
-    expect(ids.indexOf("gpt-5.6")).toBeGreaterThan(ids.indexOf("quick"));
     expect(ids.indexOf("gpt-5.6-quick")).toBeGreaterThan(ids.indexOf("quick"));
   });
 
@@ -157,7 +157,21 @@ describe("compatibility aliases", () => {
     ["gpt-5.4", "gpt-5.4-think-deeper"],
     ["gpt-5.3", "gpt-5.3-quick"],
     ["gpt-5.2", "gpt-5.2-quick"],
+    // The chat tones, folded too: one picker entry each.
+    ["gpt-5.5", "quick"],
+    ["gpt-5.5-quick", "quick"],
+    ["gpt-5.6", "gpt-5.6-quick"],
   ];
+
+  it("advertises one chat model per chat tone", () => {
+    const chat = MODELS.filter((model) => model.tone && !model.reasoning && !model.grounded);
+    const tones = chat.map((model) => model.tone);
+    expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
+  });
+
+  it("names the default by its generation", () => {
+    expect(resolveModel("quick").name).toContain("GPT-5.5 (Quick)");
+  });
 
   it("advertises unique ids and no duplicate picker names", () => {
     const names = MODELS.map((model) => model.name);
