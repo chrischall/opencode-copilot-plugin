@@ -254,28 +254,7 @@ export interface ToolRoute {
   sandbox?: string;
 }
 
-/**
- * How each tone is asked to call tools. These routes come from the reference
- * project's measurements (`m365-copilot-api.md` and `AGENTLESS_TOOL_TONES`,
- * `AGENT_CLAUDE_TONES` in its `copilot.ts`), not from live runs of this plugin.
- *
- * - Chat GPT tones work as they are: the agent, the default framing.
- * - Reasoning GPT-5.x tones keep the agent (agent-less GPT-5.x made no tool calls in
- *   the reference project, 0/4), but under the default framing they say they cannot
- *   reach the workspace, even after a command succeeded. The `relay` framing, where
- *   the user asks to be guided through their own terminal, took that to 30/30.
- * - Claude goes agent-less, as a relay. On a non-premium account the agent route does
- *   not serve Claude Sonnet at all (BotConnection apology, `InternalError`), and
- *   agent-less Claude tool-calls reliably. `Claude_Opus` is the exception: both Opus
- *   models take the agent, and Opus 4.8 without it works in its own code interpreter.
- * - GPT-6 (`Gpt_6_Reasoning`) is the same dead route with the agent on every account,
- *   premium or not; agent-less it answers. The Astra tones go agent-less too.
- * - Sol tones run commands in a remote bash sandbox of their own when agent-less, so
- *   the relay note names it and asks for the user's terminal instead (the Sol rows and
- *   quirk #21). GPT-6 Sol and GPT-6.1 Sol serve with the agent only on a premium
- *   account, so whether they get it is learned (`PREMIUM_ONLY_AGENT_TONES`). GPT-6.2
- *   Sol always goes agent-less, and GPT-6.2 Astra is routed like it.
- */
+/** The tone sets `toolRouteFor` routes by; see its comment for the evidence. */
 const SOL_TONE = /^Gpt_\d+_Sol_Reasoning$/;
 const SOL_SANDBOX = "the bash sandbox with /mnt/data and /home/oai";
 const SANDBOXED_TONES: ReadonlySet<string> = new Set(["Gpt_62_Astra_Reasoning"]);
@@ -339,6 +318,28 @@ export function forcedAgent(): boolean | undefined {
   return force === "1" ? true : force === "0" ? false : undefined;
 }
 
+/**
+ * How each tone is asked to call tools. These routes come from the reference
+ * project's measurements (`m365-copilot-api.md` and `AGENTLESS_TOOL_TONES`,
+ * `AGENT_CLAUDE_TONES` in its `copilot.ts`), not from live runs of this plugin.
+ *
+ * - Chat GPT tones work as they are: the agent, the default framing.
+ * - Reasoning GPT-5.x tones keep the agent (agent-less GPT-5.x made no tool calls in
+ *   the reference project, 0/4), but under the default framing they say they cannot
+ *   reach the workspace, even after a command succeeded. The `relay` framing, where
+ *   the user asks to be guided through their own terminal, took that to 30/30.
+ * - Claude goes agent-less, as a relay. On a non-premium account the agent route does
+ *   not serve Claude Sonnet at all (BotConnection apology, `InternalError`), and
+ *   agent-less Claude tool-calls reliably. `Claude_Opus` is the exception: both Opus
+ *   models take the agent, and Opus 4.8 without it works in its own code interpreter.
+ * - GPT-6 (`Gpt_6_Reasoning`) is the same dead route with the agent on every account,
+ *   premium or not; agent-less it answers. The Astra tones go agent-less too.
+ * - Sol tones run commands in a remote bash sandbox of their own when agent-less, so
+ *   the relay note names it and asks for the user's terminal instead (the Sol rows and
+ *   quirk #21). GPT-6 Sol and GPT-6.1 Sol serve with the agent only on a premium
+ *   account, so whether they get it is learned (`PREMIUM_ONLY_AGENT_TONES`). GPT-6.2
+ *   Sol always goes agent-less, and GPT-6.2 Astra is routed like it.
+ */
 export function toolRouteFor(tone: string | null, memory?: AgentRouteMemory): ToolRoute {
   if (tone && PREMIUM_ONLY_AGENT_TONES.has(tone)) {
     const agent = forcedAgent() ?? !memory?.isDead(tone);

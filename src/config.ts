@@ -137,8 +137,9 @@ export interface PluginOptions {
    * Let the model search for and call the user's MCP tools through one `mcp` tool.
    *
    * Off by default. opencode 2 offers MCP tools only as its Code Mode catalogue,
-   * callable as JavaScript inside `execute`, and both always leave the M365 prompt.
-   * With this on, M365 sees a single `mcp` tool whose description summarises that
+   * callable as JavaScript inside `execute`. The proxy always strips that catalogue
+   * from the prompt and never offers `execute` to M365, so with this off M365 cannot
+   * reach MCP tools at all. With this on, M365 sees a single `mcp` tool whose description summarises that
    * catalogue. A `search` is answered by the proxy itself, as one extra M365 message
    * in the same conversation. A `call` becomes an `execute` tool call that opencode
    * runs. Not yet measured against a live tenant. See `src/mcp.ts`.
