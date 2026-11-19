@@ -350,7 +350,7 @@ async function handleChatCompletion(
   // The tools the trim set aside that a search can reveal. Only the `mcp` tool itself
   // is offered, so the tool block grows by one however many MCP tools there are.
   const deferred = lean && context.deps.mcp === true ? selectDeferredTools(requested, kept) : [];
-  const tools = deferred.length > 0 ? [...kept, mcpTool(deferred.length)] : kept;
+  const tools = deferred.length > 0 ? [...kept, mcpTool(deferred)] : kept;
   if (deferred.length > 0) {
     log.info(`offering mcp search over ${deferred.length} deferred tools`, deferred.map((t) => t.function.name).join(","));
   }
