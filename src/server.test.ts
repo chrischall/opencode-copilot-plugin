@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem, throttling, type StubServer } from "../test/stub-copilot.js";
@@ -1006,30 +1007,41 @@ describe("lifecycle", () => {
   });
 });
 
-describe("MCP tool search", () => {
-  // What opencode sends with two MCP servers configured: its own tools, which the lean
-  // trim keeps or drops, plus `<server>_<tool>` tools it always drops.
+describe("the mcp proxy over opencode 2's Code Mode catalogue", () => {
+  // What opencode 2 sends: its own function tools (the lean trim keeps five), `execute`,
+  // and a system prompt whose `# Code Mode` section lists the MCP tools, callable only as
+  // JavaScript inside `execute`.
+  const fixture = (name: string) => readFileSync(new URL(`../test/fixtures/${name}`, import.meta.url), "utf8");
+  const leanTools = JSON.parse(fixture("opencode2-lean-tools.json"));
   const fn = (name: string, description: string, properties: Record<string, unknown>) => ({
     type: "function" as const,
     function: { name, description, parameters: { type: "object", properties } },
   });
+  const executeTool = fn("execute", "Run JavaScript that calls the Code Mode tools", { code: { type: "string" } });
   const requestTools = [
-    bashTool,
-    fn("read", "Read a file", { filePath: { type: "string" } }),
+    ...leanTools,
+    fn("experimental_image_generate", "Generate an image", { prompt: { type: "string" } }),
     fn("webfetch", "Fetch a web page", { url: { type: "string" } }),
-    fn("github_create_issue", "Create a new issue in a GitHub repository", {
-      repo: { type: "string" },
-      title: { type: "string" },
-    }),
-    fn("github_list_issues", "List the issues in a GitHub repository", { repo: { type: "string" } }),
-    fn("slack_post_message", "Post a message to a Slack channel", { channel: { type: "string" }, text: { type: "string" } }),
+    executeTool,
   ];
+  const systemFor = (section: string) => ({
+    role: "system",
+    content: `You are opencode, an interactive CLI agent.\n\n${section}\nToday's date: Thu Nov 19 2026\n\n<env>\nWorking directory: /home/user/app\n</env>`,
+  });
+  const system = systemFor(fixture("opencode2-codemode.txt"));
+  const partialSystem = systemFor(fixture("opencode2-codemode-partial.txt"));
   const opener = { role: "user", content: "UNIQUEOPENER file a bug about the build" };
+  const messages = [system, opener];
+
   const searchReply = "```mcp\nsearch: create a github issue\n```";
-  const callReply = "```github_create_issue\nrepo: acme/app\ntitle: Broken build\n```";
+  const callArgs = { owner: "acme", repo: "app", title: "Broken build" };
+  const callReply = "```mcp\ncall: tools.github.create_issue\n" + JSON.stringify(callArgs) + "\n```";
+  const callCodeText = `return await tools.github.create_issue(${JSON.stringify(callArgs)});`;
+
   const chatText = (connection: { frames: any[] }) =>
     connection.frames.find((f) => f.type === 4).arguments[0].message.text as string;
   const blockNames = (text: string) => [...text.matchAll(/^```([a-z_]+)$/gm)].map((m) => m[1]);
+  const catalogueLeaks = /Code Mode|tools\.github|tools\.opencode|Steps to reproduce|Post a message to a Slack channel/;
 
   /** A stub that answers each M365 turn with the next reply, repeating the last. */
   const scripted = (...replies: string[]) => {
@@ -1037,89 +1049,160 @@ describe("MCP tool search", () => {
     return startStubCopilot({ respond: () => [streamItem(replies[Math.min(turn++, replies.length - 1)]!), completion()] });
   };
 
-  it("offers no mcp tool when the option is off, and trims MCP tools as before", async () => {
-    stub = await scripted(callReply);
+  const firstCall = (body: any) => body.choices[0].message.tool_calls?.[0];
+
+  it("with the option off: no mcp tool, no execute, and the whole catalogue stripped", async () => {
+    stub = await scripted("ok");
     const { url } = await start();
-    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
-    const offered = blockNames(chatText(stub.last()));
-    expect(offered).not.toContain("mcp");
-    expect(offered).not.toContain("github_create_issue");
-    expect(body.choices[0].finish_reason).toBe("stop");
+    await post(url, { messages, tools: requestTools });
+    const text = chatText(stub.last());
+    expect(blockNames(text)).not.toContain("mcp");
+    expect(blockNames(text)).not.toContain("execute");
+    expect(text).not.toMatch(catalogueLeaks);
+    expect(text).toContain("Working directory: /home/user/app");
   });
 
   it("ignores the old, unreleased `mcp` dep: only `mcpProxy` turns the proxy on", async () => {
     stub = await scripted("ok");
     const { url } = await start({ mcp: true });
-    await post(url, { messages: [opener], tools: requestTools });
+    await post(url, { messages, tools: requestTools });
     expect(blockNames(chatText(stub.last()))).not.toContain("mcp");
   });
 
-  it("offers no mcp tool with lean off, since nothing was deferred", async () => {
+  for (const lean of [true, false]) {
+    it(`with the option on (lean ${lean ? "on" : "off"}): offers mcp, never execute, and never the catalogue`, async () => {
+      stub = await scripted("ok");
+      const { url } = await start({ mcpProxy: true, lean });
+      await post(url, { messages, tools: requestTools });
+      const text = chatText(stub.last());
+      const offered = blockNames(text);
+      expect(offered).toContain("mcp");
+      expect(offered).toContain("shell");
+      expect(offered).not.toContain("execute");
+      expect(text).not.toMatch(catalogueLeaks);
+      expect(text).not.toContain("`execute`");
+      expect(text).toMatch(/Use 12 tools from my MCP servers/);
+      expect(text).toContain("github (create_issue");
+    });
+  }
+
+  it("offers no mcp tool when the prompt has no Code Mode catalogue", async () => {
     stub = await scripted("ok");
-    const { url } = await start({ mcpProxy: true, lean: false });
+    const { url } = await start({ mcpProxy: true });
     await post(url, { messages: [opener], tools: requestTools });
     const offered = blockNames(chatText(stub.last()));
     expect(offered).not.toContain("mcp");
-    expect(offered).toContain("github_create_issue");
+    expect(offered).not.toContain("execute");
   });
 
-  it("offers no mcp tool when the request carries no MCP tools", async () => {
-    stub = await scripted("ok");
+  it("answers a search in the same conversation, with the matches' signatures", async () => {
+    stub = await scripted(searchReply, "Found it.");
     const { url } = await start({ mcpProxy: true });
-    await post(url, { messages: [opener], tools: [bashTool] });
-    expect(blockNames(chatText(stub.last()))).not.toContain("mcp");
-  });
-
-  it("offers the mcp block alongside the lean set, not the MCP tools themselves", async () => {
-    stub = await scripted("ok");
-    const { url } = await start({ mcpProxy: true });
-    await post(url, { messages: [opener], tools: requestTools });
-    const text = chatText(stub.last());
-    const offered = blockNames(text);
-    expect(offered).toContain("mcp");
-    expect(offered).toContain("bash");
-    for (const hidden of ["github_create_issue", "github_list_issues", "slack_post_message", "webfetch"]) {
-      expect(offered, `${hidden} should not be offered`).not.toContain(hidden);
-    }
-    expect(text).toMatch(/Find 3 more tools/);
-  });
-
-  it("answers a search in the same conversation, then returns the real call to the client", async () => {
-    stub = await scripted(searchReply, callReply);
-    const { url } = await start({ mcpProxy: true });
-    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
 
     expect(stub.connections).toHaveLength(2);
     const [first, second] = stub.connections.map((c) => c.frames.find((f) => f.type === 4).arguments[0]);
     expect(second.conversationId).toBe(first.conversationId);
-    expect(second.message.text).toContain("```github_create_issue");
     expect(second.message.text).toContain('Tools matching "create a github issue"');
-
-    expect(body.choices[0].finish_reason).toBe("tool_calls");
-    const call = body.choices[0].message.tool_calls[0].function;
-    expect(call.name).toBe("github_create_issue");
-    expect(JSON.parse(call.arguments)).toEqual({ repo: "acme/app", title: "Broken build" });
-  });
-
-  it("accepts the search written as the block's body too", async () => {
-    stub = await scripted("```mcp\nslack message\n```", "ok");
-    const { url } = await start({ mcpProxy: true });
-    await post(url, { messages: [opener], tools: requestTools });
-    expect(chatText(stub.connections[1]!)).toContain("```slack_post_message");
-  });
-
-  it("does not accept an unrevealed MCP tool's block", async () => {
-    stub = await scripted(callReply);
-    const { url } = await start({ mcpProxy: true });
-    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+    expect(second.message.text).toContain("tools.github.create_issue({");
     expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.choices[0].message.content).toBe("Found it.");
+  });
+
+  it("turns a call into an execute tool call with the exact code", async () => {
+    stub = await scripted(searchReply, callReply);
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(2);
+    expect(body.choices[0].finish_reason).toBe("tool_calls");
+    expect(body.choices[0].message.tool_calls).toHaveLength(1);
+    const call = firstCall(body).function;
+    expect(call.name).toBe("execute");
+    expect(JSON.parse(call.arguments)).toEqual({ code: callCodeText });
+  });
+
+  it("accepts a catalogued call without a search first, and `key: value` arguments", async () => {
+    stub = await scripted("```mcp\ncall: tools.slack.post_message\nchannel: general\ntext: hello there\n```");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(1);
+    expect(JSON.parse(firstCall(body).function.arguments)).toEqual({
+      code: 'return await tools.slack.post_message({"channel":"general","text":"hello there"});',
+    });
+  });
+
+  it("calls a bracket-notation tool by its exact path", async () => {
+    stub = await scripted('```mcp\ncall: tools.github["search-code"]\n{"q": "TODO"}\n```');
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+    expect(JSON.parse(firstCall(body).function.arguments)).toEqual({
+      code: 'return await tools.github["search-code"]({"q":"TODO"});',
+    });
+  });
+
+  it("answers an unknown path in the proxy, and never sends it to opencode", async () => {
+    stub = await scripted("```mcp\ncall: tools.github.delete_repo\n{}\n```", "I could not find it.");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(2);
+    expect(chatText(stub.connections[1]!)).toContain("There is no tool tools.github.delete_repo");
+    expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.choices[0].message.content).toBe("I could not find it.");
+  });
+
+  it("answers an unreadable mcp block in the proxy with the expected shape", async () => {
+    stub = await scripted("```mcp\ncall: tools.github.create_issue\n{not json\n```", "ok");
+    const { url } = await start({ mcpProxy: true });
+    await post(url, { messages, tools: requestTools });
+    expect(stub.connections).toHaveLength(2);
+    const text = chatText(stub.connections[1]!);
+    expect(text).toContain("could not be read: the arguments are not valid JSON");
+    expect(text).toContain("call: tools.<server>.<tool>");
+  });
+
+  it("never emits an execute call for an execute block the model wrote itself", async () => {
+    stub = await scripted("```execute\nreturn await tools.github.create_issue({});\n```");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
     expect(body.choices[0].message.tool_calls).toBeUndefined();
   });
 
-  it("stops after 3 searches and answers with the prose, never an mcp call", async () => {
+  it("sends a search with no local match to opencode's own search when the catalogue is partial", async () => {
+    stub = await scripted("```mcp\nsearch: zebra quokka\n```");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages: [partialSystem, opener], tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(1);
+    const call = firstCall(body).function;
+    expect(call.name).toBe("execute");
+    expect(JSON.parse(call.arguments)).toEqual({ code: 'return await search("zebra quokka");' });
+  });
+
+  it("answers a search with no match itself when the catalogue is complete", async () => {
+    stub = await scripted("```mcp\nsearch: zebra quokka\n```", "Nothing there.");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+    expect(stub.connections).toHaveLength(2);
+    expect(chatText(stub.connections[1]!)).toContain('No tool matched "zebra quokka"');
+    expect(body.choices[0].message.content).toBe("Nothing there.");
+  });
+
+  it("accepts any well-formed path when the catalogue is partial", async () => {
+    stub = await scripted('```mcp\ncall: tools.linear.create_ticket\n{"title": "x"}\n```');
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages: [partialSystem, opener], tools: requestTools })).json();
+    expect(JSON.parse(firstCall(body).function.arguments)).toEqual({
+      code: 'return await tools.linear.create_ticket({"title":"x"});',
+    });
+  });
+
+  it("stops after 3 proxy answers and returns the prose, never an mcp call", async () => {
     stub = await scripted("Let me look.\n\n```mcp\nsearch: something else\n```");
     const { url } = await start({ mcpProxy: true });
-    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
 
     expect(stub.connections).toHaveLength(4);
     expect(body.choices[0].finish_reason).toBe("stop");
@@ -1128,60 +1211,107 @@ describe("MCP tool search", () => {
     expect(body.choices[0].message.content).toContain("Let me look.");
   });
 
-  it("streams the real call after a search", async () => {
+  it("counts unknown paths toward the cap too", async () => {
+    stub = await scripted("```mcp\ncall: tools.nope.nothing\n{}\n```");
+    const { url } = await start({ mcpProxy: true });
+    const body: any = await (await post(url, { messages, tools: requestTools })).json();
+    expect(stub.connections).toHaveLength(4);
+    expect(body.choices[0].message.tool_calls).toBeUndefined();
+  });
+
+  it("streams the execute call after a search, never an mcp call", async () => {
     stub = await scripted(searchReply, callReply);
     const { url } = await start({ mcpProxy: true });
-    const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
-    expect(text).toContain('"name":"github_create_issue"');
+    const text = await (await post(url, { stream: true, messages, tools: requestTools })).text();
+    expect(text).toContain('"name":"execute"');
+    expect(text).toContain(JSON.stringify(JSON.stringify({ code: callCodeText })).slice(1, -1));
     expect(text).not.toContain('"name":"mcp"');
+    expect(text).toContain('"finish_reason":"tool_calls"');
     expect(text).toContain("[DONE]");
   });
 
   it("never streams an mcp call, even past the cap", async () => {
     stub = await scripted(searchReply);
     const { url } = await start({ mcpProxy: true });
-    const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
+    const text = await (await post(url, { stream: true, messages, tools: requestTools })).text();
     expect(text).not.toContain("tool_calls");
     expect(text).toContain('"finish_reason":"stop"');
     expect(text).toContain("[DONE]");
   });
 
-  it("records each search in the turn log", async () => {
+  it("records each search and the call in the turn log", async () => {
     stub = await scripted(searchReply, callReply);
     const entries: any[] = [];
     const { url } = await start({ mcpProxy: true, turnLog: (entry: unknown) => entries.push(entry) });
-    await post(url, { messages: [opener], tools: requestTools });
+    await post(url, { messages, tools: requestTools });
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ toolCalls: ["mcp"] });
     expect(entries[0].mcpSearch).toBeUndefined();
-    expect(entries[1]).toMatchObject({ mcpSearch: "create a github issue", toolCalls: ["github_create_issue"] });
+    expect(entries[0].mcpCall).toBeUndefined();
+    expect(entries[1]).toMatchObject({ mcpSearch: "create a github issue", mcpCall: "tools.github.create_issue" });
+    expect(entries[1].tools).toContain("mcp");
+    expect(entries[1].tools).not.toContain("execute");
   });
 
-  it("keeps a revealed tool callable on the next request, and sends only the new tool result", async () => {
-    stub = await scripted(searchReply, callReply, callReply);
+  it("sends only the new tool result on the next request, labelled as the mcp tool's", async () => {
+    stub = await scripted(callReply, "Filed as #42.");
     const { url } = await start({ mcpProxy: true });
-    const send = (messages: unknown[]) =>
+    const send = (history: unknown[]) =>
       authedFetch(`${url}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", [SESSION_ID_HEADER]: "ses_mcp" },
-        body: JSON.stringify({ messages, tools: requestTools }),
+        body: JSON.stringify({ messages: history, tools: requestTools }),
       });
-    const first: any = await (await send([opener])).json();
-    const call = first.choices[0].message.tool_calls[0];
+    const first: any = await (await send(messages)).json();
+    const call = firstCall(first);
     const second: any = await (
       await send([
-        opener,
+        ...messages,
         { role: "assistant", content: null, tool_calls: [call] },
         { role: "tool", tool_call_id: call.id, content: "UNIQUERESULT issue #42" },
       ])
     ).json();
 
-    expect(stub.connections).toHaveLength(3);
+    expect(stub.connections).toHaveLength(2);
     const text = chatText(stub.last());
     expect(text).toContain("UNIQUERESULT");
+    expect(text).toContain('<tool_response tool="mcp">');
     expect(text).not.toContain("UNIQUEOPENER");
-    expect(text).not.toContain("Tools matching");
-    expect(second.choices[0].message.tool_calls[0].function.name).toBe("github_create_issue");
+    expect(text).not.toMatch(catalogueLeaks);
+    expect(second.choices[0].message.content).toBe("Filed as #42.");
+  });
+
+  it("replays the proxy's execute calls into a fresh conversation as the mcp blocks the model wrote", async () => {
+    stub = await scripted("ok");
+    const { url } = await start({ mcpProxy: true });
+    const executeCall = (id: string, code: string) => ({
+      id,
+      type: "function",
+      function: { name: "execute", arguments: JSON.stringify({ code }) },
+    });
+    await post(url, {
+      messages: [
+        partialSystem,
+        opener,
+        { role: "assistant", content: null, tool_calls: [executeCall("c1", 'return await search("linear tickets");')] },
+        { role: "tool", tool_call_id: "c1", content: "SEARCHRESULT tools.linear.create_ticket" },
+        { role: "assistant", content: null, tool_calls: [executeCall("c2", callCodeText)] },
+        { role: "tool", tool_call_id: "c2", content: "CALLRESULT #42" },
+        { role: "assistant", content: null, tool_calls: [executeCall("c3", "const x = 1; return x;")] },
+        { role: "tool", tool_call_id: "c3", content: "OTHERRESULT" },
+        { role: "user", content: "and now?" },
+      ],
+      tools: requestTools,
+    });
+
+    const text = chatText(stub.last());
+    expect(text).toContain("```mcp\nsearch: linear tickets\n```");
+    expect(text).toContain("```mcp\ncall: tools.github.create_issue\n" + JSON.stringify(callArgs) + "\n```");
+    expect(text).toContain('<tool_response tool="mcp">\nSEARCHRESULT');
+    expect(text).toContain('<tool_response tool="mcp">\nCALLRESULT');
+    // Code the proxy did not write renders as it always has.
+    expect(text).toContain("```execute");
+    expect(text).toContain("const x = 1; return x;");
   });
 });
 

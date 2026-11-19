@@ -7,14 +7,12 @@ import {
   DISENGAGE_TOOL_BUDGET,
   LEAN_FALLBACK_LIMIT,
   LEAN_TOOLS,
-  OPENCODE_BUILTIN_TOOLS,
   PROVIDER_ID,
   buildModelInfos,
   buildProviderInfo,
   describeToolSelection,
   mergeOpencodeConfig,
   resolveOptions,
-  selectDeferredTools,
   selectLeanTools,
 } from "./config.js";
 
@@ -115,39 +113,6 @@ describe("selecting the toolset the model actually sees", () => {
 
   it("returns an empty toolset unchanged", () => {
     expect(selectLeanTools([])).toEqual([]);
-  });
-});
-
-describe("the tools the lean trim defers", () => {
-  const tool = (name: string): ToolDef => ({
-    type: "function",
-    function: { name, parameters: { type: "object", properties: {} } },
-  });
-
-  it("lists opencode's own tools that the trim drops on purpose", () => {
-    expect(OPENCODE_BUILTIN_TOOLS).toEqual(
-      expect.arrayContaining(["glob", "skill", "task", "todowrite", "webfetch", "websearch", "question", "invalid"]),
-    );
-  });
-
-  it("excludes the tools the trim kept and opencode's built-ins", () => {
-    const requested = ["bash", "read", "glob", "github_create_issue", "TodoWrite", "edit", "Linear_list_issues"].map(tool);
-    const kept = selectLeanTools(requested);
-    expect(names(selectDeferredTools(requested, kept))).toEqual(["github_create_issue", "Linear_list_issues"]);
-  });
-
-  it("keeps the order the harness requested them in", () => {
-    const requested = ["zeta_b", "bash", "alpha_a", "mid_c"].map(tool);
-    expect(names(selectDeferredTools(requested, [requested[1]!]))).toEqual(["zeta_b", "alpha_a", "mid_c"]);
-  });
-
-  it("compares kept names case-insensitively", () => {
-    const requested = ["Bash", "github_get"].map(tool);
-    expect(names(selectDeferredTools(requested, [tool("bash")]))).toEqual(["github_get"]);
-  });
-
-  it("gives an empty list for an empty request", () => {
-    expect(selectDeferredTools([], [])).toEqual([]);
   });
 });
 

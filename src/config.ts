@@ -86,47 +86,6 @@ export function selectLeanTools(tools: readonly ToolDef[]): ToolDef[] {
   return [...(shell ? [shell] : []), ...rest.slice(0, remaining)];
 }
 
-/**
- * opencode's own tools that the lean trim drops on purpose.
- *
- * Everything a request offers that is neither kept by `selectLeanTools` nor named
- * here came from somewhere else — in practice the user's MCP servers, which opencode
- * names `<server>_<tool>`, or another plugin. Those are the tools the `mcp` search
- * can reveal; these never are.
- */
-export const OPENCODE_BUILTIN_TOOLS = [
-  "execute",
-  "glob",
-  "skill",
-  "subagent",
-  "task",
-  "webfetch",
-  "websearch",
-  "question",
-  "todowrite",
-  "todoread",
-  "list",
-  "ls",
-  "lsp",
-  "codesearch",
-  "patch",
-  "multiedit",
-  "batch",
-  "invalid",
-] as const;
-
-/**
- * The requested tools the trim set aside that are not opencode's own: the MCP (or
- * plugin) tools. Names compare case-insensitively; the request's order is kept.
- */
-export function selectDeferredTools(requested: readonly ToolDef[], kept: readonly ToolDef[]): ToolDef[] {
-  const excluded = new Set<string>([
-    ...OPENCODE_BUILTIN_TOOLS,
-    ...kept.map((tool) => tool.function.name.toLowerCase()),
-  ]);
-  return requested.filter((tool) => !excluded.has(tool.function.name.toLowerCase()));
-}
-
 /** Tool names that mean "change a file", across opencode versions and harnesses. */
 const EDITING_TOOLS = ["edit", "write", "apply_patch", "patch", "str_replace", "create"];
 

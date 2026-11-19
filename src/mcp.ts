@@ -16,7 +16,7 @@
  */
 
 import type { CatalogTool } from "./codemode.js";
-import { describeTool, type ToolDef } from "./fenced.js";
+import type { ToolDef } from "./fenced.js";
 
 export const MCP_TOOL_NAME = "mcp";
 
@@ -405,85 +405,4 @@ export function renderMcpFence(request: Exclude<McpRequest, { kind: "invalid" }>
   if (request.kind === "search") return "```" + MCP_TOOL_NAME + `\nsearch: ${request.query}\n` + "```";
   const args = Object.keys(request.args).length === 0 ? "" : `\n${JSON.stringify(request.args)}`;
   return "```" + MCP_TOOL_NAME + `\ncall: ${request.path}` + args + "\n```";
-}
-
-// --- the deferred-tool search (until the proxy wiring moves to the catalogue) --------
-
-/**
- * @deprecated The pre-Code-Mode search over deferred function tools, still used by
- * `server.ts` until it is wired to the catalogue.
- */
-export function summariseTools(deferred: readonly ToolDef[]): string {
-  const servers = new Map<string, string[]>();
-  for (const tool of deferred) {
-    const name = tool.function.name;
-    const split = name.indexOf("_");
-    const server = split > 0 ? name.slice(0, split) : name;
-    const tools = servers.get(server) ?? [];
-    if (split > 0) tools.push(name.slice(split + 1));
-    servers.set(server, tools);
-  }
-  return summarise(servers);
-}
-
-/** @deprecated See `summariseTools`. */
-export function deferredMcpTool(deferred: readonly ToolDef[]): ToolDef {
-  const count = deferred.length;
-  const noun = count === 1 ? "tool" : "tools";
-  return {
-    type: "function",
-    function: {
-      name: MCP_TOOL_NAME,
-      description:
-        `Find ${count} more ${noun} from my MCP servers — ${summariseTools(deferred)} — by searching with a few ` +
-        "words about what you want to do; the result shows how to call each match.",
-      parameters: {
-        type: "object",
-        properties: {
-          search: { type: "string", description: "A few words describing the tool you need" },
-        },
-        required: ["search"],
-      },
-    },
-  };
-}
-
-function scoreDeferredTool(query: string, queryWords: readonly string[], tool: ToolDef): number {
-  const name = tool.function.name.toLowerCase();
-  if (query === name) return EXACT_SCORE;
-  if (query.endsWith("_") && name.startsWith(query)) return EXACT_SCORE;
-
-  const inName = new Set(nameWords(tool.function.name));
-  const inDescription = new Set(words(tool.function.description ?? ""));
-  let score = 0;
-  for (const word of queryWords) {
-    if (inName.has(word)) score += NAME_WEIGHT;
-    if (inDescription.has(word)) score += DESCRIPTION_WEIGHT;
-  }
-  return score;
-}
-
-/** @deprecated See `summariseTools`. */
-export function searchTools(query: string, deferred: readonly ToolDef[], limit = 5): ToolDef[] {
-  const normalised = query.trim().toLowerCase();
-  if (!normalised) return [];
-  const queryWords = [...new Set(words(normalised))];
-
-  return deferred
-    .map((tool, index) => ({ tool, index, score: scoreDeferredTool(normalised, queryWords, tool) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score || a.index - b.index)
-    .slice(0, Math.max(0, limit))
-    .map((entry) => entry.tool);
-}
-
-/** @deprecated See `summariseTools`. */
-export function renderDeferredSearchResult(query: string, matches: readonly ToolDef[], totalDeferred: number): string {
-  if (matches.length === 0) {
-    return `No tool matched "${query}". Try other words: ${totalDeferred} tools are available.`;
-  }
-  const lines = [`<tool_response tool="${MCP_TOOL_NAME}">`, `Tools matching "${query}":`, ""];
-  for (const tool of matches) lines.push(...describeTool(tool), "");
-  lines.push("To use one, reply with its block.", "</tool_response>");
-  return lines.join("\n");
 }

@@ -391,6 +391,18 @@ function extractFences(source: string): Fence[] {
   return fences;
 }
 
+/**
+ * The body of the first closed fence whose info string names `name` (case-insensitive),
+ * or undefined. For a tool whose body the proxy reads itself rather than mapping it
+ * onto parameters.
+ */
+export function firstFenceBody(source: string, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  return extractFences(source.replace(/\r\n?/g, "\n")).find(
+    (fence) => (fence.info.split(/\s+/)[0] ?? "").toLowerCase() === wanted,
+  )?.body;
+}
+
 function charOffset(lines: string[], lineIndex: number): number {
   let offset = 0;
   for (let i = 0; i < lineIndex && i < lines.length; i += 1) offset += lines[i]!.length + 1;
