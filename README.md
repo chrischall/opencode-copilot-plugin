@@ -358,6 +358,7 @@ accepted, with or without the `m365/` prefix:
 | `claude` | `claude-sonnet` |
 | `gpt-5.5`, `gpt-5.5-quick` | `quick` |
 | `gpt-5.6` | `gpt-5.6-quick` |
+| `think-deeper` | `gpt-5.5-think-deeper` |
 | `gpt-5.4` | `gpt-5.4-think-deeper` |
 | `gpt-5.3` | `gpt-5.3-quick` |
 | `gpt-5.2` | `gpt-5.2-quick` |
