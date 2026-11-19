@@ -548,7 +548,7 @@ describe("replaying history into a fresh conversation", () => {
   });
 
   it("renders a past call to a tool the turn no longer offers, from the history tools", () => {
-    // A tool an MCP search revealed earlier is not in this turn's tool block.
+    // A tool the request offers but this turn's tool block leaves out.
     const issueTool: ToolDef = {
       type: "function",
       function: {
