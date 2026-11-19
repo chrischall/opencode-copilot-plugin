@@ -3,6 +3,7 @@ import type { ToolDef } from "./fenced.js";
 import {
   buildToolPrompt,
   findShellTool,
+  firstFenceBody,
   isProseDocument,
   parseToolCalls,
   stripInventedJson,
@@ -334,5 +335,44 @@ describe("mixed output", () => {
     const { toolCalls, text } = parseToolCalls("I'll list the directory now.\n" + fence("bash", "ls"), [bashTool]);
     expect(toolCalls).toHaveLength(1);
     expect(text).toBe("");
+  });
+});
+
+describe("a fence opened at the end of a prose line", () => {
+  // Seen live: M365 glued the opener to the sentence before it, so the block rendered as
+  // text, nothing ran, and the user had to say "resume".
+  const reply =
+    "I'll look for the existing notes first, then check the task before drafting and saving anything.```shell\n" +
+    "python3 scripts/query.py search 'project notes' --limit 20\n" +
+    "```";
+
+  it("still runs the block", () => {
+    const { toolCalls, text } = parseToolCalls(reply, [bashTool]);
+    expect(toolCalls).toEqual([
+      { name: "bash", arguments: { command: "python3 scripts/query.py search 'project notes' --limit 20" } },
+    ]);
+    expect(text).toBe("");
+  });
+
+  it("works for a named tool fence too", () => {
+    const { toolCalls } = parseToolCalls("Reading it now.```read\nfilePath: /etc/hostname\n```", [readTool, bashTool]);
+    expect(toolCalls[0]?.name).toBe("read");
+    expect(toolCalls[0]?.arguments).toEqual({ filePath: "/etc/hostname" });
+  });
+
+  it("leaves inline code spans alone", () => {
+    const { toolCalls } = parseToolCalls("Use ```bash``` blocks for commands.", [bashTool]);
+    expect(toolCalls).toHaveLength(0);
+  });
+
+  it("does not run a glued opener that is never closed", () => {
+    const { toolCalls } = parseToolCalls("Running it.```bash\nrm -rf build", [bashTool]);
+    expect(toolCalls).toHaveLength(0);
+  });
+});
+
+describe("firstFenceBody with a glued opener", () => {
+  it("finds the block", () => {
+    expect(firstFenceBody("Searching now.```mcp\nsearch: github issue\n```", "mcp")).toBe("search: github issue");
   });
 });

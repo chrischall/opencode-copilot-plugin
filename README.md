@@ -125,7 +125,7 @@ warning and carries on.
 Four things keep a turn on track:
 
 - **A tolerant parser.** M365 writes calls loosely: the command as a `command:` header,
-  `filePath:` for `path`, quoted values, a copied `$ ` prompt, prose or an invented
+  `filePath:` for `path`, quoted values, a copied `$ ` prompt, a fence opened at the end of a sentence (`…first.```shell`), prose or an invented
   `<tool_response>` after the block. These are read as the call the model meant.
 - **One nudge after a give-up.** Chat tones sometimes answer a tool turn with "no tool
   is available" without trying. The proxy then asks once more, softly, in the same
