@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.3.0...v2.4.0) (2026-11-19)
+
+
+### Features
+
+* **models:** add GPT-6, Astra, Claude Opus, Sonnet 5/5.5 and Fable, with premium access and a cost table ([#124](https://github.com/chrischall/opencode-copilot-plugin/issues/124)) ([1c4c8e8](https://github.com/chrischall/opencode-copilot-plugin/commit/1c4c8e81cbc61b01cd835bdbaa9e163e0b3bb097))
+* **ui:** show context usage, M365 message quota and allowances in opencode's meter, footer and sidebar ([#125](https://github.com/chrischall/opencode-copilot-plugin/issues/125)) ([18d00f0](https://github.com/chrischall/opencode-copilot-plugin/commit/18d00f0f357118e8879042d9830da2ec4ae01f43))
+
+
+### Bug Fixes
+
+* **models:** list GPT-5.5's reasoning tone once, folding think-deeper into an alias ([#123](https://github.com/chrischall/opencode-copilot-plugin/issues/123)) ([3979c6d](https://github.com/chrischall/opencode-copilot-plugin/commit/3979c6db98b234d8fa78ec444237febf8eae9aed))
+* **models:** list one entry per GPT chat tone, folding gpt-5.5, gpt-5.5-quick and gpt-5.6 into aliases ([#121](https://github.com/chrischall/opencode-copilot-plugin/issues/121)) ([df2b49c](https://github.com/chrischall/opencode-copilot-plugin/commit/df2b49cc309c1d2f8ef2a73c43d6c4cf288e4214))
+
+
+### Documentation
+
+* put toolRouteFor's routing notes back on the function, and say plainly what mcpProxy off means ([#126](https://github.com/chrischall/opencode-copilot-plugin/issues/126)) ([974b559](https://github.com/chrischall/opencode-copilot-plugin/commit/974b559780021d44315c3044615b8e390f64e39f))
+
 ## [2.3.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.2.1...v2.3.0) (2026-11-19)
 
 
