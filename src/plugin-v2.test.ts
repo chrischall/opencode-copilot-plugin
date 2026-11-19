@@ -124,6 +124,26 @@ describe("the opencode 2 setup", () => {
     });
   });
 
+  it("moves a saved default that names an alias onto its canonical id", async () => {
+    // opencode looks the default up in the catalogue, which no longer lists aliases.
+    const harness = fakeContext(withProxy());
+    await setup(harness.ctx as never);
+    expect(harness.runModelTransforms({ providerID: PROVIDER_ID, modelID: "gpt-5.5" })).toEqual({
+      providerID: PROVIDER_ID,
+      modelID: "quick",
+    });
+    expect(harness.runModelTransforms({ providerID: PROVIDER_ID, modelID: "auto" })).toEqual({
+      providerID: PROVIDER_ID,
+      modelID: "m365-copilot",
+    });
+  });
+
+  it("does so even with setDefaultModel off", async () => {
+    const harness = fakeContext(withProxy({ setDefaultModel: false }));
+    await setup(harness.ctx as never);
+    expect(harness.runModelTransforms({ providerID: PROVIDER_ID, modelID: "gpt-5.6" })?.modelID).toBe("gpt-5.6-quick");
+  });
+
   it("leaves a model the user already chose alone", async () => {
     // Transforms replay on every rebuild, so an unconditional `set` would keep
     // stealing the selection back.

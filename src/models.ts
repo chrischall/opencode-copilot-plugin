@@ -76,15 +76,12 @@ export const MODELS: readonly ModelInfo[] = [
   m("gpt-6-sol", "GPT-6 Sol", "Gpt_6_Sol_Reasoning", true),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
-  m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
-  m("gpt-5.5-quick", "GPT-5.5 (Quick)", "Gpt_5_5_Chat", false),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
-  m("quick", "GPT (Quick)", "Gpt_5_5_Chat", false),
+  m("quick", "GPT-5.5 (Quick)", "Gpt_5_5_Chat", false),
   m("think-deeper", "GPT (Think Deeper)", "Gpt_5_5_Reasoning", true),
   // Live, but it writes a tool call far less often than `quick`: the reference
   // project measured 7/30, and our one run made none. Listed after the default and
   // labelled, rather than dropped, because it is fine for plain chat.
-  m("gpt-5.6", "GPT-5.6 (unreliable tool calls)", "Gpt_5_6_Chat", false),
   m("gpt-5.6-quick", "GPT-5.6 (Quick, unreliable tool calls)", "Gpt_5_6_Chat", false),
   m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),
@@ -133,7 +130,18 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-5.4": "gpt-5.4-think-deeper",
   "gpt-5.3": "gpt-5.3-quick",
   "gpt-5.2": "gpt-5.2-quick",
+  // One entry per chat tone. `quick` stays canonical, not `gpt-5.5-quick`: it is the
+  // default and the id the README measures, and a default the catalogue lacks would
+  // not load in opencode.
+  "gpt-5.5": "quick",
+  "gpt-5.5-quick": "quick",
+  "gpt-5.6": "gpt-5.6-quick",
 };
+
+/** The canonical id for an alias, or the id unchanged. */
+export function canonicalModelId(id: string): string {
+  return MODEL_ALIASES[id] ?? id;
+}
 
 const BY_ID = new Map<string, ModelInfo>(MODELS.map((model) => [model.id, model]));
 for (const [alias, canonical] of Object.entries(MODEL_ALIASES)) {
