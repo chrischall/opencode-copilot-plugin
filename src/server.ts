@@ -527,6 +527,7 @@ async function runTurn(
     ...(model.tone ? { tone: model.tone } : {}),
     agentId: agent,
     ...(model.grounded ? { grounded: true } : {}),
+    ...(model.scenario === "paid" ? { paid: true } : {}),
     signal: abort.signal,
   };
   const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) =>

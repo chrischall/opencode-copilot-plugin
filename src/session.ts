@@ -178,6 +178,13 @@ export interface TurnOptions {
    * coding turn must not reach into the mailbox.
    */
   grounded?: boolean;
+  /**
+   * Send the turn on M365's paid scenario (`OfficeWebPaidCopilot`, with the
+   * `Premium` licence type it travels with), the only scenario that serves some
+   * models. An entitlement, not a bypass: a seat without a premium Copilot licence
+   * is refused there. Ignored on a grounded turn, which has its own scenario.
+   */
+  paid?: boolean;
   signal?: AbortSignal;
   onDelta?: (chunk: string) => void;
   /**
@@ -243,7 +250,7 @@ export class CopilotSession {
 
     const token = await this.options.getToken();
     const { oid, tid } = decodeJwt(token);
-    const url = this.buildUrl(token, oid, tid, turn.grounded ?? false);
+    const url = this.buildUrl(token, oid, tid, turn.grounded ?? false, turn.paid ?? false);
 
     const { annotations, note } = await this.uploadImages(token, turn);
     const message: OutgoingMessage = { text: note ? `${text}\n\n${note}` : text, annotations };
@@ -300,14 +307,24 @@ export class CopilotSession {
     return { annotations, note };
   }
 
-  private buildUrl(token: string, oid: string, tid: string, grounded: boolean): string {
+  private buildUrl(token: string, oid: string, tid: string, grounded: boolean, paid: boolean): string {
     const origin = this.options.endpoint ?? DEFAULT_ENDPOINT;
     // The full-screen chat scenario does not ground on the mailbox; the Outlook
     // side-pane scenario does. Verified live 2026-11-09 — the side-pane params
     // are what returned real inbox results.
     const scenarioParams: Record<string, string> = grounded
       ? { source: '"owahub"', product: "OwaHub", agentHost: "Bizchat.Sidepane", scenario: "OutlookSidepaneWorkCopilot", agent: "work" }
-      : { source: '"officeweb"', product: "Office", agentHost: "Bizchat.FullScreen", scenario: "OfficeWebIncludedCopilot" };
+      : {
+          source: '"officeweb"',
+          product: "Office",
+          agentHost: "Bizchat.FullScreen",
+          // The paid scenario is what unlocks Opus 5.5, Sonnet 5/5.5 and GPT-6; the
+          // reference project sends `licenseType=Premium` with it, as the web client
+          // does. The included scenario has never sent a licence type here.
+          ...(paid
+            ? { scenario: "OfficeWebPaidCopilot", licenseType: "Premium" }
+            : { scenario: "OfficeWebIncludedCopilot" }),
+        };
     const params = new URLSearchParams({
       access_token: token,
       ConversationId: this.conversationId,

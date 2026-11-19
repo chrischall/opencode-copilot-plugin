@@ -191,6 +191,29 @@ describe("mailbox grounding", () => {
     expect(new URL(stub.last().url, "http://x").searchParams.get("scenario")).toBe("OfficeWebIncludedCopilot");
   });
 
+  it("sends no licence type on the included scenario, as before", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("hi");
+    expect(new URL(stub.last().url, "http://x").searchParams.get("licenseType")).toBeNull();
+  });
+
+  it("switches to the paid scenario with the Premium licence type for a paid model", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("hi", { tone: "Claude_Opus", paid: true });
+    const url = new URL(stub.last().url, "http://x");
+    expect(url.searchParams.get("scenario")).toBe("OfficeWebPaidCopilot");
+    expect(url.searchParams.get("licenseType")).toBe("Premium");
+    expect(url.searchParams.get("agentHost")).toBe("Bizchat.FullScreen");
+  });
+
+  it("keeps a grounded turn on the side-pane scenario even when marked paid", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("inbox?", { grounded: true, paid: true });
+    const url = new URL(stub.last().url, "http://x");
+    expect(url.searchParams.get("scenario")).toBe("OutlookSidepaneWorkCopilot");
+    expect(url.searchParams.get("licenseType")).toBeNull();
+  });
+
   it("attaches the built-in WorkSearch agent that grounds on the mailbox", async () => {
     stub = await startStubCopilot();
     await sessionFor(stub).run("hi", { grounded: true });

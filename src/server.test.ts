@@ -802,6 +802,36 @@ describe("tool turns per tone", () => {
     expect(chatArg().message.text).toMatch(/\/mnt\/data/);
   });
 
+  const cases: Array<[model: string, scenario: string, agent: boolean]> = [
+    ["claude-opus", "OfficeWebPaidCopilot", true],
+    ["claude-opus-4.8", "OfficeWebIncludedCopilot", true],
+    ["claude-sonnet-5.5", "OfficeWebPaidCopilot", false],
+    ["claude-sonnet-5", "OfficeWebPaidCopilot", false],
+    ["claude-sonnet", "OfficeWebIncludedCopilot", false],
+    ["claude-fable", "OfficeWebIncludedCopilot", false],
+    ["gpt-6-think-deeper", "OfficeWebPaidCopilot", false],
+    ["gpt-6-astra", "OfficeWebPaidCopilot", false],
+    ["gpt-6.2-astra", "OfficeWebIncludedCopilot", false],
+    ["quick", "OfficeWebIncludedCopilot", true],
+  ];
+
+  it.each(cases)("sends a %s tool turn on %s, agent attached: %s", async (model, scenario, agent) => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, { model, messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    const query = new URL(stub.last().url, "http://x").searchParams;
+    expect(query.get("scenario")).toBe(scenario);
+    expect(query.get("licenseType")).toBe(scenario === "OfficeWebPaidCopilot" ? "Premium" : null);
+    expect(chatArg().threadLevelGptId === undefined).toBe(!agent);
+  });
+
+  it("sends a paid model's plain chat on the paid scenario too", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "claude-sonnet-5.5", messages: [{ role: "user", content: "hi" }] });
+    expect(new URL(stub.last().url, "http://x").searchParams.get("scenario")).toBe("OfficeWebPaidCopilot");
+  });
+
   it("leaves the default model as it was", async () => {
     stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
     const { url } = await start();

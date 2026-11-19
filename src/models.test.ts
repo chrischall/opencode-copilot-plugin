@@ -144,8 +144,25 @@ describe("how each tone is asked to call tools", () => {
     expect(toolRouteFor("Gpt_5_5_Reasoning")).toEqual({ framing: "relay", agent: true });
   });
 
-  it("leaves Claude on the agent, since an unlicensed account refuses Claude without it", () => {
-    for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning"]) expect(toolRouteFor(tone)).toEqual({ framing: "default", agent: true });
+  it("sends Claude agent-less as a relay, since Sonnet's agent route is dead on a non-premium account", () => {
+    for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning", "Claude_Sonnet_5", "Claude_Fable"]) {
+      expect(toolRouteFor(tone)).toEqual({ framing: "relay", agent: false });
+    }
+  });
+
+  it("keeps the agent for Claude Opus, the one Claude tone that takes it", () => {
+    expect(toolRouteFor("Claude_Opus")).toEqual({ framing: "relay", agent: true });
+  });
+
+  it("sends GPT-6 and GPT-6 Astra agent-less, which is dead with the agent on every account", () => {
+    for (const tone of ["Gpt_6_Reasoning", "Gpt_6_Astra_Reasoning"]) {
+      expect(toolRouteFor(tone)).toEqual({ framing: "relay", agent: false });
+    }
+  });
+
+  it("routes GPT-6.2 Astra like GPT-6.2 Sol, steering it off the sandbox", () => {
+    expect(toolRouteFor("Gpt_62_Astra_Reasoning")).toEqual(toolRouteFor("Gpt_62_Sol_Reasoning"));
+    expect(toolRouteFor("Gpt_62_Astra_Reasoning").sandbox).toMatch(/\/mnt\/data/);
   });
 });
 
