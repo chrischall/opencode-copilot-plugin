@@ -33,7 +33,7 @@ const deferred = [slackPost, createIssue, listIssues, searchCode, linearCreate];
 
 describe("mcpTool", () => {
   it("is a function tool named mcp with one required string search parameter", () => {
-    const def = mcpTool(12);
+    const def = mcpTool(deferred);
     expect(MCP_TOOL_NAME).toBe("mcp");
     expect(def.type).toBe("function");
     expect(def.function.name).toBe("mcp");
@@ -43,17 +43,52 @@ describe("mcpTool", () => {
   });
 
   it("says how many tools can be found and that a search shows how to call them", () => {
-    const description = mcpTool(12).function.description ?? "";
-    expect(description).toContain("12");
+    const description = mcpTool(deferred).function.description ?? "";
+    expect(description).toContain("5");
     expect(description.toLowerCase()).toContain("search");
     expect(description.toLowerCase()).toContain("how to call");
   });
 
   it("keeps the count and the how-to in the one line the tool block shows", () => {
     // The tool block shows only a description's first sentence.
-    const line = describeTool(mcpTool(12))[0] ?? "";
-    expect(line).toContain("12");
+    const line = describeTool(mcpTool(deferred))[0] ?? "";
+    expect(line).toContain("5");
     expect(line.toLowerCase()).toContain("how to call");
+  });
+
+  it("summarises the tools by server, in the one line the tool block shows", () => {
+    const line = describeTool(mcpTool(deferred))[0] ?? "";
+    expect(line).toContain("github (create_issue, list_issues, searchCode)");
+    expect(line).toContain("slack (post_message)");
+    expect(line).toContain("linear (createTicket)");
+    // Servers in the order they were offered.
+    expect(line.indexOf("slack")).toBeLessThan(line.indexOf("github"));
+  });
+
+  it("shows at most four tools per server, then how many more", () => {
+    const many = Array.from({ length: 7 }, (_, i) => tool(`jira_tool${i}`, "Jira"));
+    const line = describeTool(mcpTool(many))[0] ?? "";
+    expect(line).toContain("jira (tool0, tool1, tool2, tool3, +3 more)");
+  });
+
+  it("lists at most eight servers, then how many more", () => {
+    const servers = Array.from({ length: 11 }, (_, i) => tool(`srv${i}_do`, "Does it"));
+    const line = describeTool(mcpTool(servers))[0] ?? "";
+    expect(line).toContain("srv7 (do)");
+    expect(line).not.toContain("srv8");
+    expect(line).toContain("and 3 more servers");
+  });
+
+  it("groups a name with no server prefix under its own name", () => {
+    const line = describeTool(mcpTool([tool("standalone", "x")]))[0] ?? "";
+    expect(line).toContain("standalone");
+    expect(line).toMatch(/\b1 more tool\b/);
+  });
+
+  it("keeps the summary on one line with no sentence break, so none of it is cut", () => {
+    const description = mcpTool(deferred).function.description ?? "";
+    expect(description).not.toContain("\n");
+    expect(description).not.toContain(". ");
   });
 });
 

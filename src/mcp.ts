@@ -18,20 +18,53 @@ const EXACT_SCORE = 1000;
 const NAME_WEIGHT = 3;
 const DESCRIPTION_WEIGHT = 1;
 
+/** Tools named per server in the summary, and servers named, before "+N more". */
+const SUMMARY_TOOLS_PER_SERVER = 4;
+const SUMMARY_SERVERS = 8;
+
+/**
+ * The deferred tools grouped by server, as one line: `github (create_issue, list_issues,
+ * +3 more), slack (post_message)`. opencode names an MCP tool `<server>_<tool>`, so the
+ * server is the text before the first `_`; a name without one stands alone.
+ */
+export function summariseTools(deferred: readonly ToolDef[]): string {
+  const servers = new Map<string, string[]>();
+  for (const tool of deferred) {
+    const name = tool.function.name;
+    const split = name.indexOf("_");
+    const server = split > 0 ? name.slice(0, split) : name;
+    const tools = servers.get(server) ?? [];
+    if (split > 0) tools.push(name.slice(split + 1));
+    servers.set(server, tools);
+  }
+  const entries = [...servers].slice(0, SUMMARY_SERVERS).map(([server, tools]) => {
+    if (tools.length === 0) return server;
+    const shown = tools.slice(0, SUMMARY_TOOLS_PER_SERVER);
+    const more = tools.length - shown.length;
+    return `${server} (${[...shown, ...(more > 0 ? [`+${more} more`] : [])].join(", ")})`;
+  });
+  const hidden = servers.size - SUMMARY_SERVERS;
+  return entries.join(", ") + (hidden > 0 ? `, and ${hidden} more servers` : "");
+}
+
 /**
  * The virtual tool offered to M365 alongside the lean set. Gentle wording on purpose:
  * see `buildToolPrompt` on why prompt shape matters more than size.
+ *
+ * The description carries a summary of what is behind the search, so the model knows
+ * a search is worth making and which words to search with. It stays on one line with
+ * no sentence break: the tool block shows only a description's first sentence.
  */
-export function mcpTool(deferredCount: number): ToolDef {
-  const noun = deferredCount === 1 ? "tool" : "tools";
+export function mcpTool(deferred: readonly ToolDef[]): ToolDef {
+  const count = deferred.length;
+  const noun = count === 1 ? "tool" : "tools";
   return {
     type: "function",
     function: {
       name: MCP_TOOL_NAME,
-      // One sentence: the tool block shows only a description's first.
       description:
-        `Find ${deferredCount} more ${noun} from my MCP servers by searching with a few words about ` +
-        "what you want to do; the result shows how to call each match.",
+        `Find ${count} more ${noun} from my MCP servers — ${summariseTools(deferred)} — by searching with a few ` +
+        "words about what you want to do; the result shows how to call each match.",
       parameters: {
         type: "object",
         properties: {

@@ -170,7 +170,15 @@ The lean trim keeps about five tools, and that drops **every MCP tool** opencode
 offers (they arrive as `<server>_<tool>`, for example `github_create_issue`). Listing
 them all would put M365 back over the Disengaged threshold, so they are not offered
 directly. Instead, with `{ "mcp": true }` the proxy adds **one** extra fenced tool,
-`mcp`, which searches them:
+`mcp`, which searches them. Its one-line description summarises what is behind the
+search, by server, so the model knows a search is worth making and which words to use:
+
+```
+mcp — Find 14 more tools from my MCP servers — github (create_issue, list_issues, search_code, get_file, +6 more), slack (post_message, list_channels) — by searching with a few words about what you want to do; …
+```
+
+The summary names up to four tools for each server and up to eight servers, and it is
+prose, not tool blocks. A search looks like this:
 
 ````
 ```mcp
