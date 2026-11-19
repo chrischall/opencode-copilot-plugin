@@ -370,7 +370,6 @@ them. The routing column says how a tool turn is put to M365 (see
 | `gpt-5.5-think-deeper` | included | included | agent, relay |
 | `m365-copilot` | included | included | agent |
 | `quick` | included | included | agent |
-| `think-deeper` | included | included | agent, relay |
 | `gpt-5.6-quick` | included | included | agent |
 | `claude-opus` | paid (Premium) | priority access, 40/day and 75/week | agent, relay |
 | `claude-opus-4.8` | included, premium accounts only | included, not metered | agent, relay |
@@ -554,7 +553,6 @@ quotas", and quirks #11 and #26). None has been measured from this plugin.
 | `gpt-5.5-think-deeper` | included | included | |
 | `m365-copilot` | included | included | |
 | `quick` | included | included | The default |
-| `think-deeper` | included | included | |
 | `gpt-5.6-quick` | included | included | |
 | `claude-opus` | premium, paid scenario | priority access: 40 turns a day, 75 a week | Opus 5.5 |
 | `claude-opus-4.8` | premium-only, on the included scenario | included | Gated, not metered |
