@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.3.0](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.2.1...v2.3.0) (2026-11-19)
+
+
+### Features
+
+* **mcp:** let the model find and call your MCP tools through one opt-in search tool ([#109](https://github.com/chrischall/opencode-copilot-plugin/issues/109)) ([426b851](https://github.com/chrischall/opencode-copilot-plugin/commit/426b8514f7b13d503ad923369705bb6795371faa))
+* **mcp:** reach opencode's Code Mode MCP tools only through the opt-in mcpProxy tool ([#112](https://github.com/chrischall/opencode-copilot-plugin/issues/112)) ([c180e57](https://github.com/chrischall/opencode-copilot-plugin/commit/c180e57f200d4eaeae7128bcd8e6779d1a8ab530))
+* **mcp:** summarise the MCP tools behind the search, by server, in the mcp tool's description ([#111](https://github.com/chrischall/opencode-copilot-plugin/issues/111)) ([52e16d1](https://github.com/chrischall/opencode-copilot-plugin/commit/52e16d1d85f7e5c5d541c559e5c63f6bb0075597))
+* **models:** add GPT-6 Sol (6, 6.1 and 6.2), agent-less on tool turns ([#118](https://github.com/chrischall/opencode-copilot-plugin/issues/118)) ([4994764](https://github.com/chrischall/opencode-copilot-plugin/commit/4994764f0e64b5f3d69933a04e39f3b4a71bc81c))
+
+
+### Bug Fixes
+
+* **models:** list each M365 model once in the picker, and keep accepting the old short ids ([#116](https://github.com/chrischall/opencode-copilot-plugin/issues/116)) ([c24083a](https://github.com/chrischall/opencode-copilot-plugin/commit/c24083a835c28b0688d37e3b421272ae1cbdb450))
+* **plugin:** list each model once when the plugin is loaded twice ([#115](https://github.com/chrischall/opencode-copilot-plugin/issues/115)) ([39b2d3e](https://github.com/chrischall/opencode-copilot-plugin/commit/39b2d3e2bb5e08dfff42d8c924963a0a622d374a))
+* **tools:** run a tool block whose fence M365 opened at the end of a sentence ([#114](https://github.com/chrischall/opencode-copilot-plugin/issues/114)) ([8143073](https://github.com/chrischall/opencode-copilot-plugin/commit/81430733fc2e31a5337275f88c78262fbd2b2355))
+
+
+### Documentation
+
+* **config:** describe mcpProxy as the Code Mode search-and-call tool it is ([#117](https://github.com/chrischall/opencode-copilot-plugin/issues/117)) ([8c5637f](https://github.com/chrischall/opencode-copilot-plugin/commit/8c5637f49e6140edda1379814c9f1de303516a01))
+
 ## [2.2.1](https://github.com/chrischall/opencode-copilot-plugin/compare/v2.2.0...v2.2.1) (2026-11-10)
 
 
