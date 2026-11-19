@@ -185,15 +185,21 @@ describe("plugin options", () => {
     expect(resolveOptions({}).apiKey).toBeUndefined();
   });
 
-  it("leaves MCP tool discovery off by default", () => {
-    expect(resolveOptions(undefined).mcp).toBe(false);
-    expect(resolveOptions({}).mcp).toBe(false);
-    expect(resolveOptions({ lean: true }).mcp).toBe(false);
+  it("leaves the MCP proxy off by default", () => {
+    expect(resolveOptions(undefined).mcpProxy).toBe(false);
+    expect(resolveOptions({}).mcpProxy).toBe(false);
+    expect(resolveOptions({ lean: true }).mcpProxy).toBe(false);
   });
 
-  it("can opt into MCP tool discovery", () => {
-    expect(resolveOptions({ mcp: true }).mcp).toBe(true);
-    expect(resolveOptions({ mcp: "yes" as unknown as boolean }).mcp).toBe(false);
+  it("can opt into the MCP proxy", () => {
+    expect(resolveOptions({ mcpProxy: true }).mcpProxy).toBe(true);
+    expect(resolveOptions({ mcpProxy: "yes" as unknown as boolean }).mcpProxy).toBe(false);
+  });
+
+  it("does not read the old, unreleased `mcp` option", () => {
+    const resolved = resolveOptions({ mcp: true } as never);
+    expect(resolved.mcpProxy).toBe(false);
+    expect(resolved).not.toHaveProperty("mcp");
   });
 
   it("ignores option values of the wrong type instead of crashing the plugin", () => {

@@ -183,7 +183,7 @@ export interface PluginOptions {
    * tools' call templates for the rest of the conversation. Each search is one extra
    * M365 message, and it has not yet been measured against a live tenant.
    */
-  mcp: boolean;
+  mcpProxy: boolean;
   /** Use an already-running proxy instead of starting one in-process. */
   baseUrl?: string;
   /**
@@ -215,7 +215,7 @@ export function resolveOptions(raw: Partial<PluginOptions> | undefined): PluginO
     setDefaultModel: bool(options.setDefaultModel, true),
     setSmallModel: bool(options.setSmallModel, true),
     leanSystemPrompt: bool(options.leanSystemPrompt, false),
-    mcp: bool(options.mcp, false),
+    mcpProxy: bool(options.mcpProxy, false),
     baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
     apiKey: typeof options.apiKey === "string" && options.apiKey !== "" ? options.apiKey : undefined,
   };
@@ -334,7 +334,7 @@ const OUR_OPTION_KEYS: ReadonlySet<string> = new Set<keyof PluginOptions>([
   "setDefaultModel",
   "setSmallModel",
   "leanSystemPrompt",
-  "mcp",
+  "mcpProxy",
   "baseUrl",
   "apiKey",
 ]);

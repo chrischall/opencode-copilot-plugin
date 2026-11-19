@@ -1047,9 +1047,16 @@ describe("MCP tool search", () => {
     expect(body.choices[0].finish_reason).toBe("stop");
   });
 
+  it("ignores the old, unreleased `mcp` dep: only `mcpProxy` turns the proxy on", async () => {
+    stub = await scripted("ok");
+    const { url } = await start({ mcp: true });
+    await post(url, { messages: [opener], tools: requestTools });
+    expect(blockNames(chatText(stub.last()))).not.toContain("mcp");
+  });
+
   it("offers no mcp tool with lean off, since nothing was deferred", async () => {
     stub = await scripted("ok");
-    const { url } = await start({ mcp: true, lean: false });
+    const { url } = await start({ mcpProxy: true, lean: false });
     await post(url, { messages: [opener], tools: requestTools });
     const offered = blockNames(chatText(stub.last()));
     expect(offered).not.toContain("mcp");
@@ -1058,14 +1065,14 @@ describe("MCP tool search", () => {
 
   it("offers no mcp tool when the request carries no MCP tools", async () => {
     stub = await scripted("ok");
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     await post(url, { messages: [opener], tools: [bashTool] });
     expect(blockNames(chatText(stub.last()))).not.toContain("mcp");
   });
 
   it("offers the mcp block alongside the lean set, not the MCP tools themselves", async () => {
     stub = await scripted("ok");
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     await post(url, { messages: [opener], tools: requestTools });
     const text = chatText(stub.last());
     const offered = blockNames(text);
@@ -1079,7 +1086,7 @@ describe("MCP tool search", () => {
 
   it("answers a search in the same conversation, then returns the real call to the client", async () => {
     stub = await scripted(searchReply, callReply);
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
 
     expect(stub.connections).toHaveLength(2);
@@ -1096,14 +1103,14 @@ describe("MCP tool search", () => {
 
   it("accepts the search written as the block's body too", async () => {
     stub = await scripted("```mcp\nslack message\n```", "ok");
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     await post(url, { messages: [opener], tools: requestTools });
     expect(chatText(stub.connections[1]!)).toContain("```slack_post_message");
   });
 
   it("does not accept an unrevealed MCP tool's block", async () => {
     stub = await scripted(callReply);
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
     expect(body.choices[0].finish_reason).toBe("stop");
     expect(body.choices[0].message.tool_calls).toBeUndefined();
@@ -1111,7 +1118,7 @@ describe("MCP tool search", () => {
 
   it("stops after 3 searches and answers with the prose, never an mcp call", async () => {
     stub = await scripted("Let me look.\n\n```mcp\nsearch: something else\n```");
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
 
     expect(stub.connections).toHaveLength(4);
@@ -1123,7 +1130,7 @@ describe("MCP tool search", () => {
 
   it("streams the real call after a search", async () => {
     stub = await scripted(searchReply, callReply);
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
     expect(text).toContain('"name":"github_create_issue"');
     expect(text).not.toContain('"name":"mcp"');
@@ -1132,7 +1139,7 @@ describe("MCP tool search", () => {
 
   it("never streams an mcp call, even past the cap", async () => {
     stub = await scripted(searchReply);
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
     expect(text).not.toContain("tool_calls");
     expect(text).toContain('"finish_reason":"stop"');
@@ -1142,7 +1149,7 @@ describe("MCP tool search", () => {
   it("records each search in the turn log", async () => {
     stub = await scripted(searchReply, callReply);
     const entries: any[] = [];
-    const { url } = await start({ mcp: true, turnLog: (entry: unknown) => entries.push(entry) });
+    const { url } = await start({ mcpProxy: true, turnLog: (entry: unknown) => entries.push(entry) });
     await post(url, { messages: [opener], tools: requestTools });
     expect(entries).toHaveLength(2);
     expect(entries[0]).toMatchObject({ toolCalls: ["mcp"] });
@@ -1152,7 +1159,7 @@ describe("MCP tool search", () => {
 
   it("keeps a revealed tool callable on the next request, and sends only the new tool result", async () => {
     stub = await scripted(searchReply, callReply, callReply);
-    const { url } = await start({ mcp: true });
+    const { url } = await start({ mcpProxy: true });
     const send = (messages: unknown[]) =>
       authedFetch(`${url}/v1/chat/completions`, {
         method: "POST",

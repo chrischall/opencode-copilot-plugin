@@ -22,14 +22,15 @@ describe("docs for the opt-in MCP tool search", () => {
 
   it("explains the opt-in, a fenced search, the cost and the cap", () => {
     const mcp = section(readme, "MCP tools");
-    expect(mcp).toContain('"mcp": true');
+    expect(mcp).toContain('"mcpProxy": true');
+    expect(mcp).toContain("M365_MCP_PROXY=1");
     expect(mcp).toMatch(/```mcp\nsearch: /);
     expect(mcp).toContain(`${MAX_MCP_SEARCHES} searches`);
     expect(mcp).toMatch(/not (yet )?(been )?measured/);
   });
 
   it("lists the option in the configuration block", () => {
-    expect(section(readme, "Configuration")).toMatch(/"mcp": false,\s*\/\//);
+    expect(section(readme, "Configuration")).toMatch(/"mcpProxy": false,\s*\/\//);
   });
 
   it("has a layout row for src/mcp.ts", () => {

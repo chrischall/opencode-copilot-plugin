@@ -169,7 +169,7 @@ is needed, because no run without it was tried.
 The lean trim keeps about five tools, and that drops **every MCP tool** opencode
 offers (they arrive as `<server>_<tool>`, for example `github_create_issue`). Listing
 them all would put M365 back over the Disengaged threshold, so they are not offered
-directly. Instead, with `{ "mcp": true }` the proxy adds **one** extra fenced tool,
+directly. Instead, with `{ "mcpProxy": true }` the proxy adds **one** extra fenced tool,
 `mcp`, which searches them. Its one-line description summarises what is behind the
 search, by server, so the model knows a search is worth making and which words to use:
 
@@ -207,9 +207,9 @@ name, so opencode runs it. M365 sees the lean set plus one tool however many MCP
 you have, and a found tool's template appears only in the search result, never in
 the per-turn tool list.
 
-- **Opt-in.** `mcp` is `false` by default, and it only applies while `lean` is on
+- **Opt-in.** `mcpProxy` is `false` by default, and it only applies while `lean` is on
   (without the trim nothing is deferred). A standalone `opencode-m365 serve` proxy
-  takes `M365_MCP=1` instead.
+  takes `M365_MCP_PROXY=1` instead.
 - **Cost.** Each search is one extra M365 message in the same conversation, like the
   give-up nudge; it does not start a new conversation.
 - **Cap.** At most 3 searches per request. A reply that is still a search after the
@@ -259,7 +259,7 @@ That stub run says nothing about Microsoft's side; see [Development](#developmen
     "options": {
       "lean": true,              // trim the toolset (default: true)
       "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
-      "mcp": false,              // offer MCP tools through one search tool (default: false)
+      "mcpProxy": false,         // offer MCP tools through one search tool (default: false)
       "setDefaultModel": true,   // set `model` if you have not (default: true)
       "setSmallModel": true,     // answer session titles locally (default: true)
       "baseUrl": null,           // use an already-running proxy instead of an in-process one
