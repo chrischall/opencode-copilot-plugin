@@ -782,6 +782,16 @@ describe("tool turns per tone", () => {
     expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
   });
 
+  it("sends a Sol tool turn agent-less, as a relay that names its sandbox", async () => {
+    // A non-premium account answers Sol with the agent attached on a dead route.
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    expect(chatArg().threadLevelGptId).toBeUndefined();
+    expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
+    expect(chatArg().message.text).toMatch(/\/mnt\/data/);
+  });
+
   it("leaves the default model as it was", async () => {
     stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
     const { url } = await start();
