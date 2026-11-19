@@ -68,6 +68,12 @@ export const MODELS: readonly ModelInfo[] = [
   // searches them server-side. The other models stay coding/web-only.
   m("work", "Ask your mail, Teams & files", "magic", false, true),
   m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
+  // GPT-6 Sol: reasoning models on the included scenario, so every account can reach
+  // them. They take the tool agent only on a premium account, so tool turns go
+  // agent-less (see `toolRouteFor`). Tool use not yet measured here.
+  m("gpt-6.2-sol", "GPT-6.2 Sol", "Gpt_62_Sol_Reasoning", true),
+  m("gpt-6.1-sol", "GPT-6.1 Sol", "Gpt_61_Sol_Reasoning", true),
+  m("gpt-6-sol", "GPT-6 Sol", "Gpt_6_Sol_Reasoning", true),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
@@ -192,7 +198,19 @@ export interface ToolRoute {
  *   (`ClaudeUnavailableForLicense`), where today it quietly gets GPT. Unmeasured on a
  *   licensed account, so not adopted.
  */
+/**
+ * GPT-6 Sol tones. With the declarative agent attached they serve only on a premium
+ * account; on any other account that is a dead route (`InternalError`, no content).
+ * Nothing on the token says which kind of account it is, so they always go agent-less.
+ * Agent-less, Sol runs commands in a remote bash sandbox of its own, so the relay note
+ * names it and asks for the user's terminal instead. From the reference project's
+ * protocol notes (`m365-copilot-api.md`, the Sol rows and quirk #21).
+ */
+const SOL_TONE = /^Gpt_\d+_Sol_Reasoning$/;
+const SOL_SANDBOX = "the bash sandbox with /mnt/data and /home/oai";
+
 export function toolRouteFor(tone: string | null): ToolRoute {
+  if (tone && SOL_TONE.test(tone)) return { framing: "relay", agent: false, sandbox: SOL_SANDBOX };
   if (tone?.startsWith("Gpt_") && tone.endsWith("_Reasoning")) return { framing: "relay", agent: true };
   return { framing: "default", agent: true };
 }

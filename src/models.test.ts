@@ -195,7 +195,44 @@ describe("compatibility aliases", () => {
   });
 
   it("keeps the catalogue order, with the local titler last", () => {
-    expect(listModelIds().slice(0, 3)).toEqual(["work", "work-think", "gpt-5.6-think-deeper"]);
+    expect(listModelIds().slice(0, 2)).toEqual(["work", "work-think"]);
+    const ids = listModelIds();
+    expect(ids.indexOf("gpt-5.6-think-deeper")).toBeLessThan(ids.indexOf("gpt-5.5-think-deeper"));
     expect(listModelIds().at(-1)).toBe(LOCAL_TITLE_MODEL);
+  });
+});
+
+describe("GPT-6 Sol models", () => {
+  // From the reference protocol notes: each serves on the included scenario on every
+  // account, takes the tool agent only on a premium account (a dead route otherwise),
+  // and agent-less has a remote bash sandbox of its own.
+  const sol: Array<[id: string, tone: string]> = [
+    ["gpt-6-sol", "Gpt_6_Sol_Reasoning"],
+    ["gpt-6.1-sol", "Gpt_61_Sol_Reasoning"],
+    ["gpt-6.2-sol", "Gpt_62_Sol_Reasoning"],
+  ];
+
+  it.each(sol)("%s selects %s, as a reasoning model", (id, tone) => {
+    const model = resolveModel(id);
+    expect(model.id).toBe(id);
+    expect(model.tone).toBe(tone);
+    expect(model.reasoning).toBe(true);
+    expect(model.grounded).toBeFalsy();
+    expect(resolveModel(`m365/${id}`).id).toBe(id);
+  });
+
+  it.each(sol)("%s goes agent-less on tool turns, as a relay that steers it off its own sandbox", (_id, tone) => {
+    const route = toolRouteFor(tone);
+    expect(route.agent).toBe(false);
+    expect(route.framing).toBe("relay");
+    expect(route.sandbox).toMatch(/\/mnt\/data/);
+  });
+
+  it("names them as in the M365 web client", () => {
+    expect(resolveModel("gpt-6.1-sol").name).toContain("GPT-6.1 Sol");
+  });
+
+  it("leaves the default model alone", () => {
+    expect(DEFAULT_MODEL).toBe("quick");
   });
 });

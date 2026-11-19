@@ -354,6 +354,14 @@ Each model is listed once. Older short ids (`auto`, `claude`, `gpt-5.4`, `gpt-5.
 They are no longer listed, but they are still accepted, with or without the `m365/`
 prefix, so a saved config that names one keeps working.
 
+**GPT-6 Sol** (`m365/gpt-6.2-sol`, `m365/gpt-6.1-sol`, `m365/gpt-6-sol`) are reasoning
+models that every account can reach. Their tool turns go **without** the Copilot Studio
+agent: the reference project's notes find that Sol serves with the agent only on a
+premium account, and on any other account that route returns nothing. Without the agent
+the fenced tool contract still applies, but tool use is less reliable, and Sol has a
+remote bash sandbox of its own (`/mnt/data`), so its tool turns use the relay framing
+and ask it to use your terminal instead. Their tool calling has not been measured here.
+
 Tool-calling on a live tenant (2026-11-09, one non-Premium account, a single file-read
 task per run; small samples):
 
