@@ -18,6 +18,10 @@
     "./proxy": {
       "types": "./dist/server.d.mts",
       "import": "./dist/server.mjs"
+    },
+    "./tui": {
+      "types": "./dist/tui.d.mts",
+      "import": "./dist/tui.mjs"
     }
   },
   "main": "./dist/plugin.mjs",
