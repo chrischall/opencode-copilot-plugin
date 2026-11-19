@@ -134,13 +134,14 @@ export interface PluginOptions {
    */
   leanSystemPrompt: boolean;
   /**
-   * Let the model search for and call the user's MCP tools.
+   * Let the model search for and call the user's MCP tools through one `mcp` tool.
    *
-   * Off by default. The lean trim drops every MCP tool, because each tool block
-   * counts against the Disengaged budget. With this on, the proxy offers one extra
-   * `mcp` tool instead: a search the proxy answers itself, revealing the matching
-   * tools' call templates for the rest of the conversation. Each search is one extra
-   * M365 message, and it has not yet been measured against a live tenant.
+   * Off by default. opencode 2 offers MCP tools only as its Code Mode catalogue,
+   * callable as JavaScript inside `execute`, and both always leave the M365 prompt.
+   * With this on, M365 sees a single `mcp` tool whose description summarises that
+   * catalogue. A `search` is answered by the proxy itself, as one extra M365 message
+   * in the same conversation. A `call` becomes an `execute` tool call that opencode
+   * runs. Not yet measured against a live tenant. See `src/mcp.ts`.
    */
   mcpProxy: boolean;
   /** Use an already-running proxy instead of starting one in-process. */
