@@ -48,6 +48,13 @@ describe("mcpTool", () => {
     expect(description.toLowerCase()).toContain("search");
     expect(description.toLowerCase()).toContain("how to call");
   });
+
+  it("keeps the count and the how-to in the one line the tool block shows", () => {
+    // The tool block shows only a description's first sentence.
+    const line = describeTool(mcpTool(12))[0] ?? "";
+    expect(line).toContain("12");
+    expect(line.toLowerCase()).toContain("how to call");
+  });
 });
 
 describe("searchTools", () => {

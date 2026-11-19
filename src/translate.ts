@@ -331,6 +331,12 @@ export interface PromptOptions {
   /** How the tool block is worded; see `toolRouteFor`. */
   framing?: "default" | "relay";
   sandbox?: string;
+  /**
+   * Tools a past call in the history may name, when that is more than this turn
+   * offers: a tool an MCP search revealed is callable but never in the tool block.
+   * Defaults to the turn's own tools.
+   */
+  historyTools?: readonly ToolDef[];
 }
 
 /**
@@ -398,7 +404,9 @@ export function buildTurnPrompt(
       // answer calls nobody made.
       const text = contentOf(message);
       if (text) parts.push(text);
-      for (const call of message.tool_calls ?? []) parts.push(renderToolCall(call.function.name, call.function.arguments, tools));
+      for (const call of message.tool_calls ?? []) {
+        parts.push(renderToolCall(call.function.name, call.function.arguments, options.historyTools ?? tools));
+      }
       continue;
     }
 

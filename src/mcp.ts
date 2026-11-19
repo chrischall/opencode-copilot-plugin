@@ -28,9 +28,10 @@ export function mcpTool(deferredCount: number): ToolDef {
     type: "function",
     function: {
       name: MCP_TOOL_NAME,
+      // One sentence: the tool block shows only a description's first.
       description:
-        `Find more tools. ${deferredCount} more ${noun} from my MCP servers can be found by searching ` +
-        "with a few words about what you want to do; the result shows how to call each match.",
+        `Find ${deferredCount} more ${noun} from my MCP servers by searching with a few words about ` +
+        "what you want to do; the result shows how to call each match.",
       parameters: {
         type: "object",
         properties: {

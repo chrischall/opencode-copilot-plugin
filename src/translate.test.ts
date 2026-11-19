@@ -536,6 +536,32 @@ describe("replaying history into a fresh conversation", () => {
     expect(prompt).toContain("```bash\nls -la\n```");
     expect(prompt.indexOf("```bash\nls -la")).toBeLessThan(prompt.indexOf("README.md"));
   });
+
+  it("renders a past call to a tool the turn no longer offers, from the history tools", () => {
+    // A tool an MCP search revealed earlier is not in this turn's tool block.
+    const issueTool: ToolDef = {
+      type: "function",
+      function: {
+        name: "github_create_issue",
+        description: "Create an issue",
+        parameters: { type: "object", properties: { repo: { type: "string" }, title: { type: "string" } } },
+      },
+    };
+    const messages = [
+      user("file it"),
+      {
+        role: "assistant" as const,
+        content: null,
+        tool_calls: [
+          { id: "c2", type: "function" as const, function: { name: "github_create_issue", arguments: '{"repo":"a/b","title":"Bug"}' } },
+        ],
+      },
+      { role: "tool" as const, tool_call_id: "c2", content: "#1" },
+    ];
+    const prompt = buildTurnPrompt(messages, [bashTool], 0, { historyTools: [bashTool, issueTool] });
+    expect(prompt).toContain("```github_create_issue\nrepo: a/b\ntitle: Bug\n```");
+    expect(prompt).not.toContain('"repo":"a/b"');
+  });
 });
 
 describe("tool results", () => {

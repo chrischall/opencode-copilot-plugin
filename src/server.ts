@@ -16,7 +16,8 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel, toolRouteFor } from "./models.js";
-import { describeToolSelection, selectLeanTools } from "./config.js";
+import { describeToolSelection, selectDeferredTools, selectLeanTools } from "./config.js";
+import { MCP_TOOL_NAME, mcpTool, renderSearchResult, searchTools } from "./mcp.js";
 import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, TurnRejectedError, type TurnResult } from "./session.js";
 import { createPrivateAppender } from "./private-fs.js";
 import {
@@ -143,7 +144,12 @@ interface Conversation extends ConversationState {
   note?: string;
   /** Tail of this conversation's turn queue: one M365 session runs one turn at a time. */
   turn?: Promise<void>;
+  /** Deferred tools an `mcp` search has shown the model; callable for the conversation's life. */
+  revealed?: Set<string>;
 }
+
+/** Searches answered per request before the reply goes back to the client as it is. */
+export const MAX_MCP_SEARCHES = 3;
 
 export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
   const pool = new ConversationPool();
@@ -327,9 +333,10 @@ async function handleChatCompletion(
 
   const model = resolveModel(body.model);
   const requested = (body.tools ?? []) as ToolDef[];
-  const tools = context.deps.lean === false ? requested : selectLeanTools(requested);
-  if (tools.length !== requested.length) {
-    log.info(`trimmed toolset ${requested.length} -> ${tools.length}`, tools.map((t) => t.function.name).join(","));
+  const lean = context.deps.lean !== false;
+  const kept = lean ? selectLeanTools(requested) : requested;
+  if (kept.length !== requested.length) {
+    log.info(`trimmed toolset ${requested.length} -> ${kept.length}`, kept.map((t) => t.function.name).join(","));
     // Reached only when the trim actually removed something, which cannot happen
     // with lean off. Warn once per process rather than per turn: a drifted
     // allowlist is a standing condition, not a per-request event.
@@ -338,6 +345,14 @@ async function handleChatCompletion(
       warnedAboutToolSelection = true;
       log.warn(concern);
     }
+  }
+
+  // The tools the trim set aside that a search can reveal. Only the `mcp` tool itself
+  // is offered, so the tool block grows by one however many MCP tools there are.
+  const deferred = lean && context.deps.mcp === true ? selectDeferredTools(requested, kept) : [];
+  const tools = deferred.length > 0 ? [...kept, mcpTool(deferred.length)] : kept;
+  if (deferred.length > 0) {
+    log.info(`offering mcp search over ${deferred.length} deferred tools`, deferred.map((t) => t.function.name).join(","));
   }
 
   // The titler never touches M365 — see models.ts for why that matters. A harness
@@ -360,7 +375,7 @@ async function handleChatCompletion(
   conversation.turn = previous.then(() => current);
   await previous;
   try {
-    await runTurn(request, response, context, body, conversation, model, tools);
+    await runTurn(request, response, context, body, conversation, model, tools, deferred, requested);
   } finally {
     release();
   }
@@ -383,6 +398,8 @@ export interface TurnLogEntry {
   resultValue?: string;
   /** This turn was the follow-up sent after a give-up. */
   nudged?: boolean;
+  /** This turn was the reply to an `mcp` search the proxy answered; the query. */
+  mcpSearch?: string;
   error?: string;
 }
 
@@ -406,6 +423,8 @@ async function runTurn(
   conversation: Conversation,
   model: ReturnType<typeof resolveModel>,
   tools: ToolDef[],
+  deferred: ToolDef[] = [],
+  requested: ToolDef[] = tools,
 ): Promise<void> {
   // The pool's restart check ran before we queued; re-run it now that the previous
   // turn has recorded what it sent.
@@ -419,8 +438,21 @@ async function runTurn(
   // carries no opencode tools, so the fenced tool prompt is never attached, no
   // declarative agent is wired, and no tool-call parsing runs on its answer. That
   // is what keeps "ask your work" from being handed a coding toolset it can't act
-  // on. Every tools-derived decision below reads `effectiveTools`.
+  // on. Every tools-derived decision below reads `effectiveTools` (or, for parsing,
+  // `parseTools()`, which adds only the tools an `mcp` search revealed).
   const effectiveTools = model.grounded ? [] : tools;
+
+  // The `mcp` search: deferred tools become parseable once a search has revealed
+  // them, without ever joining the per-turn tool block.
+  const searchable = model.grounded ? [] : deferred;
+  const revealed = (conversation.revealed ??= new Set<string>());
+  const parseTools = (): ToolDef[] => [
+    ...effectiveTools,
+    ...searchable.filter((tool) => revealed.has(tool.function.name)),
+  ];
+  // What the client may receive: an `mcp` call is the proxy's own, never opencode's.
+  const clientTools = (): ToolDef[] =>
+    searchable.length > 0 ? parseTools().filter((tool) => tool.function.name !== MCP_TOOL_NAME) : parseTools();
 
   // Only the messages this turn carries: M365 already has any earlier image.
   const images = collectImages(body.messages, conversation.sentMessageCount);
@@ -432,6 +464,8 @@ async function runTurn(
     ...(route.sandbox ? { sandbox: route.sandbox } : {}),
     ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
     ...(note ? { note } : {}),
+    // A past call may name a revealed tool, which this turn's tool block leaves out.
+    ...(effectiveTools.length > 0 ? { historyTools: [...effectiveTools, ...requested] } : {}),
   });
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
@@ -474,7 +508,7 @@ async function runTurn(
   const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) =>
     logTurn({
       reply: result.text,
-      toolCalls: parseToolCalls(result.text, effectiveTools).toolCalls.map((call) => call.name),
+      toolCalls: parseToolCalls(result.text, parseTools()).toolCalls.map((call) => call.name),
       ...(result.contentOrigin ? { contentOrigin: result.contentOrigin } : {}),
       ...(result.turnCount !== undefined ? { turnCount: result.turnCount } : {}),
       ...(result.throttle ? { throttle: result.throttle } : {}),
@@ -497,7 +531,7 @@ async function runTurn(
     // not a new conversation.
     if (
       effectiveTools.length > 0 &&
-      parseToolCalls(result.text, effectiveTools).toolCalls.length === 0 &&
+      parseToolCalls(result.text, parseTools()).toolCalls.length === 0 &&
       looksLikeGiveUp(result.text)
     ) {
       recordTurn(result);
@@ -508,18 +542,33 @@ async function runTurn(
       recordTurn(result);
     }
 
+    // The proxy answers an `mcp` search itself, in the same conversation: one extra
+    // M365 message per search, not a new conversation. Capped, so a model that keeps
+    // searching cannot spend the request.
+    for (let searches = 0; searchable.length > 0 && searches < MAX_MCP_SEARCHES; searches += 1) {
+      const call = parseToolCalls(result.text, parseTools()).toolCalls[0];
+      if (call?.name !== MCP_TOOL_NAME) break;
+      const query = typeof call.arguments.search === "string" ? call.arguments.search.trim() : "";
+      const matches = searchTools(query, searchable);
+      for (const match of matches) revealed.add(match.function.name);
+      result = await conversation.session.run(renderSearchResult(query, matches, searchable.length), turnOptions);
+      recordTurn(result, { mcpSearch: query });
+    }
+    if (searchable.length > 0) result = { ...result, text: stripMcpCalls(result.text) };
+    const finalTools = clientTools();
+
     // +1 for the reply the client is about to append to its history: M365 already
     // has that turn, and sending it back would paste its own answer in as user input.
     conversation.sentMessageCount = body.messages.length + 1;
     const allowMultiple = context.deps.allowMultiTool ?? false;
-    conversation.note = noteAbout(parseToolCalls(result.text, effectiveTools, { allowMultiple }));
+    conversation.note = noteAbout(parseToolCalls(result.text, finalTools, { allowMultiple }));
 
     if (!streaming) {
-      sendJson(response, 200, buildCompletion(result, { model: model.id, tools: effectiveTools, allowMultiple: context.deps.allowMultiTool ?? false }));
+      sendJson(response, 200, buildCompletion(result, { model: model.id, tools: finalTools, allowMultiple }));
       return;
     }
 
-    finishStream(response, streamId, model.id, result, effectiveTools, canStreamText, context.deps.allowMultiTool ?? false);
+    finishStream(response, streamId, model.id, result, finalTools, canStreamText, allowMultiple);
   } catch (error) {
     logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
     if (error instanceof DisengagedError) {
@@ -549,6 +598,18 @@ export function noteAbout(parsed: { toolCalls: { name: string }[]; skippedCalls:
   if (parsed.inventedResult) lines.push("The result you predicted after your call was set aside; the real one is below.");
   return lines.length > 0 ? lines.join(" ") : undefined;
 }
+
+/**
+ * Drop every `mcp` block from a reply. Past the search cap the client gets the
+ * reply's prose (and any real call in it), never a call to the proxy's own tool.
+ */
+export function stripMcpCalls(text: string): string {
+  const stripped = text.replace(MCP_FENCE, "");
+  // A reply with no `mcp` block is left exactly as M365 wrote it.
+  return stripped === text ? text : stripped.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+const MCP_FENCE = /^[ \t]*(`{3,}|~{3,})[ \t]*mcp(?![\w-])[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$\n?/gim;
 
 /** Emit the closing frames of a streamed turn. */
 function finishStream(
