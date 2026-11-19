@@ -164,6 +164,54 @@ progress checks (grep for what was left, re-reading a file after editing it), no
 These runs had the routing header, so they show it causes no harm. They don't show it
 is needed, because no run without it was tried.
 
+## MCP tools
+
+The lean trim keeps about five tools, and that drops **every MCP tool** opencode
+offers (they arrive as `<server>_<tool>`, for example `github_create_issue`). Listing
+them all would put M365 back over the Disengaged threshold, so they are not offered
+directly. Instead, with `{ "mcp": true }` the proxy adds **one** extra fenced tool,
+`mcp`, which searches them:
+
+````
+```mcp
+search: create a github issue
+```
+````
+
+The proxy answers that search **itself**; it never reaches opencode. It ranks the MCP
+tools against the words (a hit in a tool's name counts more than one in its
+description) and sends the best five back to M365 in the same conversation, each
+written as its normal fence template. A search for a server's prefix, such as
+`github_`, lists that server's tools. The model then calls the real tool with its own
+block:
+
+````
+```github_create_issue
+owner: me
+repo: project
+title: The build fails on Node 22
+```
+````
+
+Once a search has shown a tool, the proxy accepts that tool's block for the rest of
+the conversation and passes it to opencode as an ordinary tool call under its real
+name, so opencode runs it. M365 sees the lean set plus one tool however many MCP tools
+you have, and a found tool's template appears only in the search result, never in
+the per-turn tool list.
+
+- **Opt-in.** `mcp` is `false` by default, and it only applies while `lean` is on
+  (without the trim nothing is deferred). A standalone `opencode-m365 serve` proxy
+  takes `M365_MCP=1` instead.
+- **Cost.** Each search is one extra M365 message in the same conversation, like the
+  give-up nudge; it does not start a new conversation.
+- **Cap.** At most 3 searches per request. A reply that is still a search after the
+  third is returned as its prose, and an `mcp` call never reaches opencode.
+- **Not yet measured on a live tenant.** The flow is covered against the offline stub
+  only; whether M365 searches and then calls reliably has not been measured.
+
+With `M365_TURN_LOG` set, each search is a turn of its own in the log, marked with
+`mcpSearch` and the query.
+
 ## opencode 2
 
 This is an opencode 2 plugin (`@opencode/cli`, `@opencode/plugin`): its default export
@@ -203,6 +251,7 @@ That stub run says nothing about Microsoft's side; see [Development](#developmen
     "options": {
       "lean": true,              // trim the toolset (default: true)
       "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
+      "mcp": false,              // offer MCP tools through one search tool (default: false)
       "setDefaultModel": true,   // set `model` if you have not (default: true)
       "setSmallModel": true,     // answer session titles locally (default: true)
       "baseUrl": null,           // use an already-running proxy instead of an in-process one
