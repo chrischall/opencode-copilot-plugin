@@ -47,10 +47,13 @@ do not silently move the logic back.
 | `src/image.ts` | Image input: collect `image_url` parts, upload to M365, build the annotation |
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |
+| `src/metrics.ts` | Per-session UI metrics: the bounded (LRU) store, `metering` → named allowances, the `m365-copilot.metrics` RPC definition and its HTTP fallback for an external proxy |
 | `src/config.ts` | Provider config and tool policy — the pure decisions |
 | `src/plugin.ts` | The entry. One default export, `{ id, setup }` — nothing else |
 | `src/plugin-v2.ts` | opencode 2's `setup()`: provider/model transforms and the title hook |
 | `src/runtime.ts` | Resolve options, start the proxy (or use an external one) |
+| `src/tui.ts` | The TUI entry, exported as `./tui`. One default export, `{ id, setup }`; loads the host's Solid runtime by dynamic import |
+| `src/tui-status.ts` | The footer line and sidebar lines: pure formatting, the metrics feed, and the slot rendering |
 | `src/cli.ts` | `opencode-m365 login \| setup \| serve \| doctor` |
 
 ## Testing
