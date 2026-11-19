@@ -307,6 +307,18 @@ describe("chat completions", () => {
     expect(body.usage.x_m365_conversation_messages).toBe(3);
   });
 
+  it("estimates the context and reply tokens so opencode's context meter moves", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("abcdefgh"), completion()] });
+    const { url } = await start();
+    const messages = [{ role: "user", content: "x".repeat(400) }];
+    const body: any = await (await post(url, { messages, tools: [bashTool] })).json();
+    expect(body.usage.x_m365_tokens_estimated).toBe(true);
+    // The whole context opencode sent, tool definitions included: not the delta M365 got.
+    expect(body.usage.prompt_tokens).toBe(100 + Math.ceil(JSON.stringify(bashTool).length / 4));
+    expect(body.usage.completion_tokens).toBe(2);
+    expect(body.usage.total_tokens).toBe(body.usage.prompt_tokens + 2);
+  });
+
   it("defaults the model when the client sends none", async () => {
     stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
     const { url } = await start();
@@ -635,6 +647,60 @@ describe("streaming", () => {
     const { url } = await start();
     const response = await post(url, { stream: true, messages: [{ role: "user", content: "hi" }] });
     expect(response.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  const frames = (text: string) =>
+    text
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("data: ") && !frame.includes("[DONE]"))
+      .map((frame) => JSON.parse(frame.slice("data: ".length)));
+
+  it("ends with a usage chunk when the client asks for include_usage, as opencode does", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(5), delta("abcd"), streamItem("abcd"), completion()] });
+    const { url } = await start();
+    const text = await (
+      await post(url, {
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "y".repeat(40) }],
+      })
+    ).text();
+    const events = frames(text);
+    const last = events.at(-1);
+    expect(last.choices).toEqual([]);
+    expect(last.usage).toMatchObject({
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      x_m365_tokens_estimated: true,
+      x_m365_conversation_messages: 5,
+    });
+    // The finish reason comes first, so opencode has closed the turn before usage lands.
+    expect(events.at(-2).choices[0].finish_reason).toBe("stop");
+    expect(text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("estimates a streamed tool call from its arguments", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    const text = await (
+      await post(url, {
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "list" }],
+        tools: [bashTool],
+      })
+    ).text();
+    const events = frames(text);
+    const call = events.find((event) => event.choices?.[0]?.delta?.tool_calls).choices[0].delta.tool_calls[0];
+    expect(events.at(-1).usage.completion_tokens).toBe(Math.ceil((call.function.name + call.function.arguments).length / 4));
+  });
+
+  it("sends no usage chunk when the client did not ask for one", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("hi"), completion()] });
+    const { url } = await start();
+    const text = await (await post(url, { stream: true, messages: [{ role: "user", content: "hi" }] })).text();
+    expect(frames(text).some((event) => event.usage)).toBe(false);
   });
 
   it("buffers a tool turn, because fences can only be parsed once complete", async () => {

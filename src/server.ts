@@ -61,6 +61,9 @@ import {
   generateTitle,
   streamChunk,
   streamDone,
+  streamUsageChunk,
+  estimateCompletionTokens,
+  estimatePromptTokens,
   toOpenAiToolCall,
   type ChatRequest,
   type ConversationState,
@@ -678,16 +681,26 @@ async function runTurn(
       : parseToolCalls(result.text, clientTools, { allowMultiple });
     conversation.note = noteAbout(parsed);
 
+    // The whole context opencode sent, as it sent it: its context meter wants that size.
+    const promptTokens = estimatePromptTokens(body.messages, body.tools);
     if (!streaming) {
       sendJson(
         response,
         200,
-        buildCompletion(result, { model: model.id, tools: clientTools, allowMultiple, ...(proxyCall ? { toolCalls: [proxyCall] } : {}) }),
+        buildCompletion(result, {
+          model: model.id,
+          tools: clientTools,
+          allowMultiple,
+          promptTokens,
+          ...(proxyCall ? { toolCalls: [proxyCall] } : {}),
+        }),
       );
       return;
     }
 
-    finishStream(response, streamId, model.id, parsed, canStreamText);
+    finishStream(response, streamId, model.id, parsed, canStreamText, {
+      ...(body.stream_options?.include_usage ? { usage: { result, promptTokens } } : {}),
+    });
   } catch (error) {
     logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
     if (error instanceof DisengagedError) {
@@ -788,17 +801,26 @@ function finishStream(
   model: string,
   parsed: { toolCalls: readonly ParsedToolCall[]; text: string },
   alreadyStreamedText: boolean,
+  options: { usage?: { result: TurnResult; promptTokens: number } } = {},
 ): void {
   const { toolCalls, text } = parsed;
+  const openAiCalls = toolCalls.length > 0 ? toolCalls.map(toOpenAiToolCall) : undefined;
 
-  if (toolCalls.length > 0) {
-    response.write(streamChunk(streamId, model, { toolCalls: toolCalls.map(toOpenAiToolCall) }));
+  if (openAiCalls) {
+    response.write(streamChunk(streamId, model, { toolCalls: openAiCalls }));
     response.write(streamChunk(streamId, model, { finishReason: "tool_calls" }));
   } else {
     // If we streamed deltas the client already has the text; sending it again would
     // duplicate the answer.
     if (!alreadyStreamedText && text) response.write(streamChunk(streamId, model, { content: text }));
     response.write(streamChunk(streamId, model, { finishReason: "stop" }));
+  }
+
+  // Asked for with `stream_options.include_usage`, which opencode sends by default.
+  if (options.usage) {
+    const { result, promptTokens } = options.usage;
+    const completionTokens = estimateCompletionTokens(openAiCalls ? null : text, openAiCalls);
+    response.write(streamUsageChunk(streamId, model, buildUsage(result, { promptTokens, completionTokens })));
   }
 
   response.write(streamDone());
