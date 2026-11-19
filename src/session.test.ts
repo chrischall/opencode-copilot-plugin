@@ -386,6 +386,41 @@ describe("receiving a response", () => {
     expect(result.throttle).toEqual({ current: 42, max: 600 });
   });
 
+  it("keeps a paid-scenario turn's priority-access allowances off the throttling frame", async () => {
+    stub = await startStubCopilot({
+      respond: () => [throttling(2, 600, { ClaudeOpusQueryDaily: 31, ClaudeOpusQuery75: 70 }), botMessage("ok"), completion()],
+    });
+    const result = await sessionFor(stub).run("hi");
+    expect(result.metering).toEqual({ ClaudeOpusQueryDaily: 31, ClaudeOpusQuery75: 70 });
+  });
+
+  it("reads metering off the closing stream item too, and skips entries with no number", async () => {
+    stub = await startStubCopilot({
+      respond: () => [
+        {
+          type: 2,
+          item: {
+            messages: [{ author: "bot", text: "ok" }],
+            result: { value: "Success" },
+            throttling: {
+              numUserMessagesInConversation: 1,
+              maxNumUserMessagesInConversation: 600,
+              metering: { ClaudeSonnet55QueryDaily: { remainingAllowance: 79 }, Broken: {}, Odd: null },
+            },
+          },
+        },
+        completion(),
+      ],
+    });
+    const result = await sessionFor(stub).run("hi");
+    expect(result.metering).toEqual({ ClaudeSonnet55QueryDaily: 79 });
+  });
+
+  it("leaves metering out on an included-scenario turn, which carries none", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(1), botMessage("ok"), completion()] });
+    expect((await sessionFor(stub).run("hi")).metering).toBeUndefined();
+  });
+
   it("surfaces the classifier scores that predict disengagement", async () => {
     stub = await startStubCopilot({
       respond: () => [

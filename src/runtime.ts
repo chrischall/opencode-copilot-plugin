@@ -12,6 +12,7 @@ import { getOrCreateAgent } from "./agent.js";
 import { createTokenClient } from "./auth.js";
 import { resolveOptions, type PluginOptions } from "./config.js";
 import { createLogger } from "./log.js";
+import { remoteMetrics, type MetricsSource, type SessionMetricsStore } from "./metrics.js";
 import { startServer } from "./server.js";
 
 const log = createLogger("plugin");
@@ -50,6 +51,16 @@ export interface M365Runtime {
   /** The bearer secret that surface demands, ready to hand over as the `apiKey`. */
   apiKey: string;
   options: PluginOptions;
+  /**
+   * The in-process proxy's per-session metrics. Absent when attached to an external
+   * proxy (`baseUrl`): that one keeps its own, out of this process's reach.
+   */
+  metrics?: SessionMetricsStore;
+  /**
+   * An external proxy's metrics, read from it over HTTP. Set only when attached with
+   * `baseUrl`, so the TUI status works with `opencode-m365 serve` too.
+   */
+  remoteMetrics?: MetricsSource;
   /** Stops the proxy, if this runtime is the one that started it. */
   close(): Promise<void>;
 }
@@ -74,7 +85,8 @@ export async function startRuntime(rawOptions?: Record<string, unknown>): Promis
         "baseUrl is set but no proxy secret is: pass the key `opencode-m365 serve` printed as the `apiKey` plugin option, or set M365_PROXY_KEY",
       );
     }
-    return { baseUrl: options.baseUrl, apiKey: apiKey ?? "missing-proxy-secret", options, close: async () => {} };
+    const key = apiKey ?? "missing-proxy-secret";
+    return { baseUrl: options.baseUrl, apiKey: key, options, remoteMetrics: remoteMetrics(options.baseUrl, key), close: async () => {} };
   }
 
   const tokens = createTokenClient();
@@ -91,5 +103,5 @@ export async function startRuntime(rawOptions?: Record<string, unknown>): Promis
   });
 
   log.info(`M365 Copilot proxy listening on ${proxy.url}`);
-  return { baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey, options, close: () => proxy.close() };
+  return { baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey, options, metrics: proxy.metrics, close: () => proxy.close() };
 }

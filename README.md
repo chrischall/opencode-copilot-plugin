@@ -610,6 +610,57 @@ carries no metering.
 **Included at no extra cost:** everything else (`quick`, the GPT-5.x tones, Sonnet 4.6,
 the Sol models, `m365-copilot`, the work models), within the limits above.
 
+## Context and budget in the UI
+
+opencode shows three things for a session on an `m365/*` model. Every one of them is
+an estimate or a snapshot, not a bill.
+
+**The context meter (opencode's own).** M365 reports no token counts, so the proxy
+estimates them at about four characters per token, rounded up. `prompt_tokens` is the
+size of the whole context opencode sent for the request (every message, plus the tool
+definitions), not the smaller delta M365 actually received, because the meter wants the
+size of the context opencode holds. Each attached image counts a fixed 85 tokens.
+`completion_tokens` is the reply's text, or the tool call's name and arguments. The
+usage is marked `x_m365_tokens_estimated: true`, and a streamed reply carries it in a
+final chunk when the request sets `stream_options.include_usage`, which opencode does
+by default. Treat the meter as a rough guide: the real tokenizer, and whatever M365
+adds on its side, are invisible here.
+
+**The footer** (the TUI `prompt.footer.status` slot) is one line:
+
+```
+M365 12/600 msgs · Opus 5.5 31/40 today · 3 credit turns
+```
+
+**The sidebar** (`sidebar.content`) lists the same data with labels: the model, the
+conversation's messages, the estimated context tokens, the turns this session (and how
+many were on credits), every allowance M365 last reported and when, and the last
+refusal (`licence` or `allowance`) until a later turn is answered.
+
+A part with no data yet is left out, and a session on another provider shows nothing.
+
+Where each number comes from:
+
+| Shown | Source |
+|---|---|
+| `12/600 msgs` | M365's `throttling` on every turn: messages used in this session's conversation, out of its 600 cap (the same figure as `usage.x_m365_conversation_remaining`) |
+| Context tokens | The estimate above, from the last request |
+| `31/40 today` | M365's `metering` map. It arrives **only after a paid-scenario turn** (Opus 5.5, Sonnet 5.5), so it is blank until one, and then kept, as of the time it was read, over later turns that carry none. Caps come from the reference project's notes; GPT-6.2's are not measured, so only the remaining count shows |
+| `3 credit turns` | A **count** of turns on a model billed to Copilot credits. The charge itself (`billing_info`) is reported only over a channel this plugin does not use, so no amount is shown |
+| Refusal | The last premium-licence or priority-access refusal, see [Premium models and the paid scenario](#premium-models-and-the-paid-scenario) |
+
+See [What it costs](#what-it-costs) for which models spend what.
+
+The proxy keeps these figures in memory per opencode session (the 200 most recently
+used), for its own lifetime only. The TUI half of the plugin (the package's `./tui`
+export, loaded from the same plugin reference) reads them over opencode's RPC domain
+as `m365-copilot.metrics`: when a session first appears, when the proxy announces a
+change, and when a model step ends or fails. Nothing polls. Attached to an external
+proxy with `baseUrl`, the plugin reads the same figures from
+`GET /v1/m365/metrics/<sessionID>`, behind the proxy's bearer secret. The TUI draws
+with the Solid runtime opencode provides to plugins; if a host lacks it, the status is
+simply absent and the provider still loads.
+
 ## Authentication
 
 Sign-in is a CLI concern, never the plugin's: the plugin only refreshes silently and asks

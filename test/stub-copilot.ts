@@ -194,7 +194,11 @@ export function disengaged() {
   };
 }
 
-export function throttling(current: number, max = 600) {
+/**
+ * The per-conversation quota frame. A paid-scenario turn also carries `metering`: the
+ * account's priority-access allowances, `{ key: remaining }` here for brevity.
+ */
+export function throttling(current: number, max = 600, metering?: Record<string, number>) {
   return {
     type: 1,
     target: "update",
@@ -204,6 +208,13 @@ export function throttling(current: number, max = 600) {
           numUserMessagesInConversation: current,
           maxNumUserMessagesInConversation: max,
           numLongDocSummaryUserMessagesInConversation: 0,
+          ...(metering
+            ? {
+                metering: Object.fromEntries(
+                  Object.entries(metering).map(([key, remaining]) => [key, { remainingAllowance: remaining }]),
+                ),
+              }
+            : {}),
         },
       },
     ],

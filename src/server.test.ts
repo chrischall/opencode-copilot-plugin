@@ -307,11 +307,125 @@ describe("chat completions", () => {
     expect(body.usage.x_m365_conversation_messages).toBe(3);
   });
 
+  it("estimates the context and reply tokens so opencode's context meter moves", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("abcdefgh"), completion()] });
+    const { url } = await start();
+    const messages = [{ role: "user", content: "x".repeat(400) }];
+    const body: any = await (await post(url, { messages, tools: [bashTool] })).json();
+    expect(body.usage.x_m365_tokens_estimated).toBe(true);
+    // The whole context opencode sent, tool definitions included: not the delta M365 got.
+    expect(body.usage.prompt_tokens).toBe(100 + Math.ceil(JSON.stringify(bashTool).length / 4));
+    expect(body.usage.completion_tokens).toBe(2);
+    expect(body.usage.total_tokens).toBe(body.usage.prompt_tokens + 2);
+  });
+
   it("defaults the model when the client sends none", async () => {
     stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
     const { url } = await start();
     const body: any = await (await post(url, { messages: [{ role: "user", content: "hi" }] })).json();
     expect(body.model).toBe(DEFAULT_MODEL);
+  });
+});
+
+describe("per-session metrics", () => {
+  const postAs = (url: string, sessionId: string | undefined, body: unknown) =>
+    authedFetch(`${url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(sessionId ? { [SESSION_ID_HEADER]: sessionId } : {}) },
+      body: JSON.stringify(body),
+    });
+
+  it("records the session's model, quota, context, turns and allowances", async () => {
+    stub = await startStubCopilot({
+      respond: () => [throttling(12, 600, { ClaudeOpusQueryDaily: 31, ClaudeOpusQuery75: 70, DeepResearch: 100 }), botMessage("ok"), completion()],
+    });
+    const { url } = await start();
+    const messages = [{ role: "user", content: "x".repeat(400) }];
+    expect((await postAs(url, "ses_a", { model: "m365/claude-opus", messages })).status).toBe(200);
+    expect(proxy!.metrics.get("ses_a")).toMatchObject({
+      sessionID: "ses_a",
+      model: { id: "claude-opus" },
+      conversation: { used: 12, max: 600 },
+      contextTokens: 100,
+      turns: 1,
+      creditTurns: 0,
+      allowances: { labels: ["Opus 5.5: 31/40 left today, 70/75 left this week"] },
+    });
+  });
+
+  it("counts the turns on a credit-billed model", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, "ses_c", { model: "claude-fable", messages: [{ role: "user", content: "hi" }] });
+    await postAs(url, "ses_c", {
+      model: "claude-fable",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: "again" },
+      ],
+    });
+    expect(proxy!.metrics.get("ses_c")).toMatchObject({ turns: 2, creditTurns: 2 });
+  });
+
+  it("records the streamed path too", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(5), delta("abcd"), streamItem("abcd"), completion()] });
+    const { url } = await start();
+    await (await postAs(url, "ses_s", { stream: true, messages: [{ role: "user", content: "hi" }] })).text();
+    expect(proxy!.metrics.get("ses_s")).toMatchObject({ turns: 1, conversation: { used: 5, max: 600 } });
+  });
+
+  it("keeps the last refusal: a used-up allowance, then a missing licence", async () => {
+    let refusal: "allowance" | "licence" = "allowance";
+    stub = await startStubCopilot({
+      respond: () =>
+        refusal === "allowance"
+          ? [{ type: 2, item: { messages: [], result: { value: "OutOfCredits", message: "You've used your available priority access to the Opus model for today.", creditScenario: "TotalTurn" } } }, completion()]
+          : [{ type: 2, item: { messages: [], result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "no licence" } } }, completion()],
+    });
+    const { url } = await start();
+    expect((await postAs(url, "ses_r", { model: "claude-opus", messages: [{ role: "user", content: "hi" }] })).status).toBe(422);
+    expect(proxy!.metrics.get("ses_r")).toMatchObject({ turns: 0, lastRefusal: { reason: "allowance" } });
+    expect(proxy!.metrics.get("ses_r")?.lastRefusal?.message).toMatch(/daily priority-access allowance/);
+
+    refusal = "licence";
+    await postAs(url, "ses_r", { model: "claude-opus", messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics.get("ses_r")?.lastRefusal?.reason).toBe("licence");
+  });
+
+  it("records nothing for a request that names no session, or for the local titler", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, undefined, { messages: [{ role: "user", content: "hi" }] });
+    await postAs(url, "ses_t", { model: LOCAL_TITLE_MODEL, messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics.size).toBe(0);
+  });
+
+  it("uses a store the caller hands in", async () => {
+    const { SessionMetricsStore } = await import("./metrics.js");
+    const metrics = new SessionMetricsStore();
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start({ metrics });
+    await postAs(url, "ses_x", { messages: [{ role: "user", content: "hi" }] });
+    expect(proxy!.metrics).toBe(metrics);
+    expect(metrics.get("ses_x")?.turns).toBe(1);
+  });
+
+  it("serves a session's metrics at /v1/m365/metrics/<id>, behind the secret", async () => {
+    // What a plugin attached to this proxy with `baseUrl` reads: the store is in
+    // this process, not in opencode's.
+    stub = await startStubCopilot({ respond: () => [throttling(7, 600), botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, "ses/odd id", { messages: [{ role: "user", content: "hi" }] });
+
+    const known = await authedFetch(`${url}/v1/m365/metrics/${encodeURIComponent("ses/odd id")}`);
+    expect(known.status).toBe(200);
+    expect(((await known.json()) as { metrics: unknown }).metrics).toMatchObject({ sessionID: "ses/odd id", turns: 1, conversation: { used: 7, max: 600 } });
+
+    const unknown = await authedFetch(`${url}/v1/m365/metrics/ses_nope`);
+    expect(await unknown.json()).toEqual({ metrics: null });
+
+    expect((await fetch(`${url}/v1/m365/metrics/ses_nope`)).status).toBe(401);
   });
 });
 
@@ -635,6 +749,60 @@ describe("streaming", () => {
     const { url } = await start();
     const response = await post(url, { stream: true, messages: [{ role: "user", content: "hi" }] });
     expect(response.headers.get("content-type")).toContain("text/event-stream");
+  });
+
+  const frames = (text: string) =>
+    text
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("data: ") && !frame.includes("[DONE]"))
+      .map((frame) => JSON.parse(frame.slice("data: ".length)));
+
+  it("ends with a usage chunk when the client asks for include_usage, as opencode does", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(5), delta("abcd"), streamItem("abcd"), completion()] });
+    const { url } = await start();
+    const text = await (
+      await post(url, {
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "y".repeat(40) }],
+      })
+    ).text();
+    const events = frames(text);
+    const last = events.at(-1);
+    expect(last.choices).toEqual([]);
+    expect(last.usage).toMatchObject({
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      total_tokens: 11,
+      x_m365_tokens_estimated: true,
+      x_m365_conversation_messages: 5,
+    });
+    // The finish reason comes first, so opencode has closed the turn before usage lands.
+    expect(events.at(-2).choices[0].finish_reason).toBe("stop");
+    expect(text.trimEnd().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("estimates a streamed tool call from its arguments", async () => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    const text = await (
+      await post(url, {
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "list" }],
+        tools: [bashTool],
+      })
+    ).text();
+    const events = frames(text);
+    const call = events.find((event) => event.choices?.[0]?.delta?.tool_calls).choices[0].delta.tool_calls[0];
+    expect(events.at(-1).usage.completion_tokens).toBe(Math.ceil((call.function.name + call.function.arguments).length / 4));
+  });
+
+  it("sends no usage chunk when the client did not ask for one", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("hi"), completion()] });
+    const { url } = await start();
+    const text = await (await post(url, { stream: true, messages: [{ role: "user", content: "hi" }] })).text();
+    expect(frames(text).some((event) => event.usage)).toBe(false);
   });
 
   it("buffers a tool turn, because fences can only be parsed once complete", async () => {

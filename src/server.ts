@@ -47,6 +47,8 @@ import {
   EmptyInternalError,
   M365ThrottledError,
   M365UnavailableError,
+  PremiumLicenceRequiredError,
+  PriorityAccessExhaustedError,
   TurnRejectedError,
   type TurnResult,
 } from "./session.js";
@@ -61,6 +63,9 @@ import {
   generateTitle,
   streamChunk,
   streamDone,
+  streamUsageChunk,
+  estimateCompletionTokens,
+  estimatePromptTokens,
   toOpenAiToolCall,
   type ChatRequest,
   type ConversationState,
@@ -69,6 +74,7 @@ import { collectImages } from "./image.js";
 import { firstFenceBody, parseToolCalls } from "./fenced.js";
 import { looksLikeGiveUp, nudgeFor } from "./giveup.js";
 import { createLogger } from "./log.js";
+import { METRICS_PATH, SessionMetricsStore } from "./metrics.js";
 
 const log = createLogger("server");
 
@@ -151,6 +157,11 @@ export interface ServerDeps {
   allowedOrigins?: readonly string[];
   /** Largest request body accepted, in bytes. */
   maxBodyBytes?: number;
+  /**
+   * Where per-session metrics go (model, quota, context, allowances), keyed by the
+   * {@link SESSION_ID_HEADER}. A fresh one is made when this is omitted.
+   */
+  metrics?: SessionMetricsStore;
 }
 
 export interface ProxyHandle {
@@ -158,6 +169,8 @@ export interface ProxyHandle {
   port: number;
   /** The bearer secret a client must send. */
   apiKey: string;
+  /** Per-session metrics for opencode's UI, served by the plugin over RPC. */
+  metrics: SessionMetricsStore;
   close(): Promise<void>;
 }
 
@@ -204,6 +217,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     );
   }
   const maxBodyBytes = deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+  const metrics = deps.metrics ?? new SessionMetricsStore();
 
   // Resolved once, then reused: provisioning an agent is slow and only the first
   // tool request should pay for it. A failure is cached only when it is permanent
@@ -234,7 +248,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
 
   const portOf = () => (server.address() as AddressInfo).port;
   const server = createServer((request, response) => {
-    handle(request, response, { deps, pool, agentId, agentRoutes, apiKey, maxBodyBytes, port: portOf() }).catch((error) => {
+    handle(request, response, { deps, pool, agentId, agentRoutes, apiKey, maxBodyBytes, metrics, port: portOf() }).catch((error) => {
       log.error("unhandled request failure", String(error));
       sendError(response, 500, "internal_error", String(error));
     });
@@ -251,6 +265,7 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     url: `http://${urlHost}:${port}`,
     port,
     apiKey,
+    metrics,
     close: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections?.();
@@ -266,6 +281,7 @@ interface Context {
   agentRoutes: AgentRouteMemory;
   apiKey: string;
   maxBodyBytes: number;
+  metrics: SessionMetricsStore;
   port: number;
 }
 
@@ -348,6 +364,19 @@ async function handle(request: IncomingMessage, response: ServerResponse, contex
     return;
   }
 
+  // The session's metrics, for a plugin attached to this proxy with `baseUrl`: the
+  // store lives here, out of that opencode process's reach (`remoteMetrics`).
+  if (method === "GET" && url.pathname.startsWith(`/v1${METRICS_PATH}`)) {
+    let sessionID = "";
+    try {
+      sessionID = decodeURIComponent(url.pathname.slice(`/v1${METRICS_PATH}`.length));
+    } catch {
+      // A malformed escape names no session.
+    }
+    sendJson(response, 200, { metrics: (sessionID && context.metrics.get(sessionID)) || null });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/v1/chat/completions") {
     await handleChatCompletion(request, response, context);
     return;
@@ -410,8 +439,7 @@ async function handleChatCompletion(
     return;
   }
 
-  const sessionHeader = request.headers[SESSION_ID_HEADER];
-  const sessionId = typeof sessionHeader === "string" && sessionHeader !== "" ? sessionHeader : undefined;
+  const sessionId = sessionIdOf(request);
   const conversation = context.pool.resolve(body.messages, sessionId ? { sessionId } : {}) as Conversation;
 
   // Serialise turns per conversation: two overlapping requests on one CopilotSession
@@ -426,6 +454,12 @@ async function handleChatCompletion(
   } finally {
     release();
   }
+}
+
+/** opencode's session id, from {@link SESSION_ID_HEADER}, when the request names one. */
+function sessionIdOf(request: IncomingMessage): string | undefined {
+  const header = request.headers[SESSION_ID_HEADER];
+  return typeof header === "string" && header !== "" ? header : undefined;
 }
 
 export interface TurnLogEntry {
@@ -554,7 +588,18 @@ async function runTurn(
     ...(model.scenario === "paid" ? { paid: true } : {}),
     signal: abort.signal,
   };
-  const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) =>
+  // The whole context opencode sent, as it sent it: its context meter wants that size.
+  const promptTokens = estimatePromptTokens(body.messages, body.tools);
+  const sessionId = sessionIdOf(request);
+  const recordTurn = (result: TurnResult, extra: Partial<TurnLogEntry> = {}) => {
+    if (sessionId) {
+      context.metrics.recordTurn(sessionId, {
+        model,
+        contextTokens: promptTokens,
+        ...(result.throttle ? { throttle: result.throttle } : {}),
+        ...(result.metering ? { metering: result.metering } : {}),
+      });
+    }
     logTurn({
       reply: result.text,
       toolCalls: parseToolCalls(result.text, effectiveTools).toolCalls.map((call) => call.name),
@@ -565,6 +610,7 @@ async function runTurn(
       ...(result.resultValue ? { resultValue: result.resultValue } : {}),
       ...extra,
     });
+  };
 
   const session = conversation.session;
   const firstTurn = () =>
@@ -682,14 +728,25 @@ async function runTurn(
       sendJson(
         response,
         200,
-        buildCompletion(result, { model: model.id, tools: clientTools, allowMultiple, ...(proxyCall ? { toolCalls: [proxyCall] } : {}) }),
+        buildCompletion(result, {
+          model: model.id,
+          tools: clientTools,
+          allowMultiple,
+          promptTokens,
+          ...(proxyCall ? { toolCalls: [proxyCall] } : {}),
+        }),
       );
       return;
     }
 
-    finishStream(response, streamId, model.id, parsed, canStreamText);
+    finishStream(response, streamId, model.id, parsed, canStreamText, {
+      ...(body.stream_options?.include_usage ? { usage: { result, promptTokens } } : {}),
+    });
   } catch (error) {
     logTurn({ error: error instanceof Error ? `${error.name}: ${error.message}` : String(error) });
+    const refusal =
+      error instanceof PriorityAccessExhaustedError ? "allowance" : error instanceof PremiumLicenceRequiredError ? "licence" : undefined;
+    if (sessionId && refusal) context.metrics.recordRefusal(sessionId, { model, reason: refusal, message: (error as Error).message });
     if (error instanceof DisengagedError) {
       // A disengaged conversation stays disengaged. Drop it, so the next request
       // opens a fresh one and replays the whole history into it.
@@ -788,17 +845,26 @@ function finishStream(
   model: string,
   parsed: { toolCalls: readonly ParsedToolCall[]; text: string },
   alreadyStreamedText: boolean,
+  options: { usage?: { result: TurnResult; promptTokens: number } } = {},
 ): void {
   const { toolCalls, text } = parsed;
+  const openAiCalls = toolCalls.length > 0 ? toolCalls.map(toOpenAiToolCall) : undefined;
 
-  if (toolCalls.length > 0) {
-    response.write(streamChunk(streamId, model, { toolCalls: toolCalls.map(toOpenAiToolCall) }));
+  if (openAiCalls) {
+    response.write(streamChunk(streamId, model, { toolCalls: openAiCalls }));
     response.write(streamChunk(streamId, model, { finishReason: "tool_calls" }));
   } else {
     // If we streamed deltas the client already has the text; sending it again would
     // duplicate the answer.
     if (!alreadyStreamedText && text) response.write(streamChunk(streamId, model, { content: text }));
     response.write(streamChunk(streamId, model, { finishReason: "stop" }));
+  }
+
+  // Asked for with `stream_options.include_usage`, which opencode sends by default.
+  if (options.usage) {
+    const { result, promptTokens } = options.usage;
+    const completionTokens = estimateCompletionTokens(openAiCalls ? null : text, openAiCalls);
+    response.write(streamUsageChunk(streamId, model, buildUsage(result, { promptTokens, completionTokens })));
   }
 
   response.write(streamDone());

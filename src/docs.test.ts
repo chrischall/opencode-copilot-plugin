@@ -138,3 +138,43 @@ describe("docs for what it costs", () => {
     expect(costs).toMatch(/GPT-6\.1 Sol/);
   });
 });
+
+describe("docs for context and budget in the UI", () => {
+  const ui = section(readme, "Context and budget in the UI");
+
+  it("is its own section, right after What it costs", () => {
+    const headings = [...readme.matchAll(/^## (.+)$/gm)].map((match) => match[1]);
+    expect(headings.indexOf("Context and budget in the UI")).toBe(headings.indexOf("What it costs") + 1);
+  });
+
+  it("explains the estimated token meter", () => {
+    expect(ui).toContain("x_m365_tokens_estimated");
+    expect(ui).toMatch(/four characters/);
+    expect(ui).toMatch(/estimate/);
+    expect(ui).toContain("include_usage");
+  });
+
+  it("shows the footer line and what the sidebar lists", () => {
+    expect(ui).toContain("M365 12/600 msgs · Opus 5.5 31/40 today · 3 credit turns");
+    expect(ui).toContain("prompt.footer.status");
+    expect(ui).toContain("sidebar.content");
+    expect(ui).toMatch(/refus/i);
+  });
+
+  it("says where each number comes from", () => {
+    expect(ui).toMatch(/paid-scenario turn/);
+    expect(ui).toMatch(/count/);
+    expect(ui).toContain("billing_info");
+    expect(ui).toContain("m365-copilot.metrics");
+    expect(ui).toContain("/v1/m365/metrics/");
+    expect(ui).toContain("(#what-it-costs)");
+  });
+});
+
+describe("layout rows for the UI metrics files", () => {
+  it("has a row for each of src/metrics.ts, src/tui.ts and src/tui-status.ts", () => {
+    expect(agents).toMatch(/^\| `src\/metrics\.ts` \|/m);
+    expect(agents).toMatch(/^\| `src\/tui\.ts` \|.*`\.\/tui`/m);
+    expect(agents).toMatch(/^\| `src\/tui-status\.ts` \|/m);
+  });
+});

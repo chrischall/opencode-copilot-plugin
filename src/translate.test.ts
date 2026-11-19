@@ -8,9 +8,14 @@ import {
   buildCompletion,
   buildTurnPrompt,
   buildUsage,
+  estimateCompletionTokens,
+  estimatePromptTokens,
+  estimateTokens,
   generateTitle,
+  IMAGE_PART_TOKENS,
   streamChunk,
   streamDone,
+  streamUsageChunk,
 } from "./translate.js";
 
 const bashTool: ToolDef = {
@@ -482,6 +487,98 @@ describe("usage reporting", () => {
     const usage = buildUsage({ text: "" });
     expect(usage.prompt_tokens).toBe(0);
     expect(usage.total_tokens).toBe(0);
+  });
+});
+
+describe("token estimates", () => {
+  it("counts about four characters per token, rounding up", () => {
+    expect(estimateTokens("")).toBe(0);
+    expect(estimateTokens("a")).toBe(1);
+    expect(estimateTokens("abcd")).toBe(1);
+    expect(estimateTokens("abcde")).toBe(2);
+  });
+
+  it("sizes the whole context opencode sent: every message, plus the tool definitions", () => {
+    const messages = [system("s".repeat(40)), user("u".repeat(40))];
+    const bare = estimatePromptTokens(messages);
+    expect(bare).toBe(20);
+    const withTools = estimatePromptTokens(messages, [bashTool]);
+    expect(withTools).toBe(bare + estimateTokens(JSON.stringify(bashTool)));
+  });
+
+  it("counts an assistant's tool calls and a tool result", () => {
+    const call = { id: "c1", type: "function" as const, function: { name: "bash", arguments: '{"command":"ls"}' } };
+    const messages = [
+      { role: "assistant", content: null, tool_calls: [call] },
+      { role: "tool", tool_call_id: "c1", content: "file.txt" },
+    ];
+    expect(estimatePromptTokens(messages)).toBe(estimateTokens("bash" + '{"command":"ls"}' + "file.txt"));
+  });
+
+  it("counts an image part as a fixed amount, not its base64 length", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "abcd" },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${"A".repeat(10_000)}` } },
+        ],
+      },
+    ];
+    expect(estimatePromptTokens(messages)).toBe(1 + IMAGE_PART_TOKENS);
+  });
+
+  it("is zero for an empty context", () => {
+    expect(estimatePromptTokens([], [])).toBe(0);
+    expect(estimatePromptTokens([{ role: "user", content: "" }])).toBe(0);
+  });
+
+  it("sizes the reply from its text, or from the call arguments when it is a call", () => {
+    expect(estimateCompletionTokens("abcdefgh")).toBe(2);
+    expect(estimateCompletionTokens(null)).toBe(0);
+    const call = { id: "c1", type: "function" as const, function: { name: "bash", arguments: '{"command":"ls"}' } };
+    expect(estimateCompletionTokens(null, [call])).toBe(estimateTokens("bash" + '{"command":"ls"}'));
+  });
+});
+
+describe("estimated usage", () => {
+  it("fills the standard fields from the estimate and marks them as estimated", () => {
+    const usage = buildUsage({ text: "", throttle: { current: 4, max: 600 } }, { promptTokens: 120, completionTokens: 30 });
+    expect(usage).toMatchObject({
+      prompt_tokens: 120,
+      completion_tokens: 30,
+      total_tokens: 150,
+      x_m365_tokens_estimated: true,
+      x_m365_conversation_messages: 4,
+    });
+  });
+
+  it("does not claim an estimate when there is none", () => {
+    expect(buildUsage({ text: "" }).x_m365_tokens_estimated).toBeUndefined();
+  });
+
+  it("estimates a completion's tokens from the context it was given and the reply it returns", () => {
+    const completion = buildCompletion({ text: "abcdefgh" }, { model: "m", tools: [], promptTokens: 50 });
+    expect(completion.usage).toMatchObject({ prompt_tokens: 50, completion_tokens: 2, total_tokens: 52, x_m365_tokens_estimated: true });
+  });
+
+  it("estimates a tool-call completion from the call it returns", () => {
+    const completion = buildCompletion({ text: "```bash\nls\n```" }, { model: "m", tools: [bashTool], promptTokens: 10 });
+    const call = completion.choices[0]!.message.tool_calls![0]!;
+    expect(completion.usage.completion_tokens).toBe(estimateTokens(call.function.name + call.function.arguments));
+  });
+
+  it("streams usage as its own chunk with no choices, the way OpenAI does for include_usage", () => {
+    const frame = streamUsageChunk("id1", "m", { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 });
+    expect(frame.startsWith("data: ")).toBe(true);
+    const payload = JSON.parse(frame.slice("data: ".length));
+    expect(payload).toMatchObject({ id: "id1", object: "chat.completion.chunk", model: "m", choices: [] });
+    expect(payload.usage.total_tokens).toBe(4);
+  });
+
+  it("accepts stream_options from the request", () => {
+    const parsed = ChatCompletionRequest.parse({ messages: [user("hi")], stream: true, stream_options: { include_usage: true } });
+    expect(parsed.stream_options?.include_usage).toBe(true);
   });
 });
 

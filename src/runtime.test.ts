@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { botMessage, completion, startStubCopilot, throttling, type StubServer } from "../test/stub-copilot.js";
 import { startRuntime, type M365Runtime } from "./runtime.js";
+import { SESSION_ID_HEADER, startServer, type ProxyHandle } from "./server.js";
 
 let runtime: M365Runtime | undefined;
 const savedKey = process.env.M365_PROXY_KEY;
@@ -38,5 +40,30 @@ describe("the proxy secret the plugin hands opencode", () => {
     process.env.M365_PROXY_KEY = "a-shared-secret-for-the-in-process-proxy";
     runtime = await startRuntime({});
     expect(runtime.apiKey).toBe("a-shared-secret-for-the-in-process-proxy");
+  });
+});
+
+describe("metrics when attached to an external proxy", () => {
+  let stub: StubServer | undefined;
+  let proxy: ProxyHandle | undefined;
+  afterEach(async () => {
+    await proxy?.close();
+    await stub?.close();
+    proxy = stub = undefined;
+  });
+
+  it("are read from that proxy, so the TUI status works with `serve` too", async () => {
+    stub = await startStubCopilot({ respond: () => [throttling(9, 600), botMessage("ok"), completion()] });
+    const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    proxy = await startServer({ getToken: async () => `${b64({ alg: "none" })}.${b64({ oid: "o", tid: "t" })}.sig`, endpoint: stub.origin });
+    await fetch(`${proxy.url}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${proxy.apiKey}`, "Content-Type": "application/json", [SESSION_ID_HEADER]: "ses_e" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+    });
+
+    runtime = await startRuntime({ baseUrl: `${proxy.url}/v1`, apiKey: proxy.apiKey });
+    expect(runtime.metrics).toBeUndefined();
+    expect(await runtime.remoteMetrics?.get("ses_e")).toMatchObject({ sessionID: "ses_e", conversation: { used: 9, max: 600 } });
   });
 });
