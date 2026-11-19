@@ -7,12 +7,14 @@ import {
   DISENGAGE_TOOL_BUDGET,
   LEAN_FALLBACK_LIMIT,
   LEAN_TOOLS,
+  OPENCODE_BUILTIN_TOOLS,
   PROVIDER_ID,
   buildModelInfos,
   buildProviderInfo,
   describeToolSelection,
   mergeOpencodeConfig,
   resolveOptions,
+  selectDeferredTools,
   selectLeanTools,
 } from "./config.js";
 
@@ -116,6 +118,39 @@ describe("selecting the toolset the model actually sees", () => {
   });
 });
 
+describe("the tools the lean trim defers", () => {
+  const tool = (name: string): ToolDef => ({
+    type: "function",
+    function: { name, parameters: { type: "object", properties: {} } },
+  });
+
+  it("lists opencode's own tools that the trim drops on purpose", () => {
+    expect(OPENCODE_BUILTIN_TOOLS).toEqual(
+      expect.arrayContaining(["glob", "skill", "task", "todowrite", "webfetch", "websearch", "question", "invalid"]),
+    );
+  });
+
+  it("excludes the tools the trim kept and opencode's built-ins", () => {
+    const requested = ["bash", "read", "glob", "github_create_issue", "TodoWrite", "edit", "Linear_list_issues"].map(tool);
+    const kept = selectLeanTools(requested);
+    expect(names(selectDeferredTools(requested, kept))).toEqual(["github_create_issue", "Linear_list_issues"]);
+  });
+
+  it("keeps the order the harness requested them in", () => {
+    const requested = ["zeta_b", "bash", "alpha_a", "mid_c"].map(tool);
+    expect(names(selectDeferredTools(requested, [requested[1]!]))).toEqual(["zeta_b", "alpha_a", "mid_c"]);
+  });
+
+  it("compares kept names case-insensitively", () => {
+    const requested = ["Bash", "github_get"].map(tool);
+    expect(names(selectDeferredTools(requested, [tool("bash")]))).toEqual(["github_get"]);
+  });
+
+  it("gives an empty list for an empty request", () => {
+    expect(selectDeferredTools([], [])).toEqual([]);
+  });
+});
+
 describe("plugin options", () => {
   it("defaults to lean mode on", () => {
     expect(resolveOptions(undefined).lean).toBe(true);
@@ -148,6 +183,17 @@ describe("plugin options", () => {
     expect(resolveOptions({ apiKey: "from-serve" }).apiKey).toBe("from-serve");
     expect(resolveOptions({ apiKey: 42 as unknown as string }).apiKey).toBeUndefined();
     expect(resolveOptions({}).apiKey).toBeUndefined();
+  });
+
+  it("leaves MCP tool discovery off by default", () => {
+    expect(resolveOptions(undefined).mcp).toBe(false);
+    expect(resolveOptions({}).mcp).toBe(false);
+    expect(resolveOptions({ lean: true }).mcp).toBe(false);
+  });
+
+  it("can opt into MCP tool discovery", () => {
+    expect(resolveOptions({ mcp: true }).mcp).toBe(true);
+    expect(resolveOptions({ mcp: "yes" as unknown as boolean }).mcp).toBe(false);
   });
 
   it("ignores option values of the wrong type instead of crashing the plugin", () => {

@@ -88,6 +88,11 @@ export interface ServerDeps {
    */
   leanSystemPrompt?: string;
   /**
+   * Offer the `mcp` search tool, so the model can find and call the MCP tools the
+   * lean trim set aside. Off unless set; only meaningful with `lean` on.
+   */
+  mcp?: boolean;
+  /**
    * Receives one entry per M365 turn: the raw reply, what was parsed from it, and
    * M365's diagnostics. Defaults to a JSONL file at `M365_TURN_LOG` when that is set,
    * and to nothing otherwise — the raw reply can hold anything from the workspace.
