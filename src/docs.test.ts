@@ -22,17 +22,37 @@ describe("docs for the opt-in MCP tool search", () => {
 
   it("explains the opt-in, a fenced search, the cost and the cap", () => {
     const mcp = section(readme, "MCP tools");
-    expect(mcp).toContain('"mcp": true');
+    expect(mcp).toContain('"mcpProxy": true');
+    expect(mcp).toContain("M365_MCP_PROXY=1");
     expect(mcp).toMatch(/```mcp\nsearch: /);
     expect(mcp).toContain(`${MAX_MCP_SEARCHES} searches`);
     expect(mcp).toMatch(/not (yet )?(been )?measured/);
   });
 
-  it("lists the option in the configuration block", () => {
-    expect(section(readme, "Configuration")).toMatch(/"mcp": false,\s*\/\//);
+  it("explains Code Mode, the call and its body, and the partial catalogue", () => {
+    const mcp = section(readme, "MCP tools");
+    expect(mcp).toContain("Code Mode");
+    expect(mcp).toContain("`execute`");
+    expect(mcp).toMatch(/```mcp\ncall: tools\.github\.create_issue\n\{/);
+    expect(mcp).toMatch(/```mcp\ncall: tools\.\w+\.\w+\n\w+: /);
+    expect(mcp).toContain("return await tools.github.create_issue(");
+    expect(mcp).toMatch(/partial/);
+    expect(mcp).toContain("return await search(");
+    expect(mcp).toContain("mcpCall");
   });
 
-  it("has a layout row for src/mcp.ts", () => {
-    expect(agents).toMatch(/^\| `src\/mcp\.ts` \|/m);
+  it("no longer describes #109's per-tool fences or the lean-only restriction", () => {
+    const mcp = section(readme, "MCP tools");
+    expect(mcp).not.toContain("```github_create_issue");
+    expect(mcp).not.toMatch(/only applies while `lean` is on/);
+  });
+
+  it("lists the option in the configuration block", () => {
+    expect(section(readme, "Configuration")).toMatch(/"mcpProxy": false,\s*\/\//);
+  });
+
+  it("has layout rows for src/mcp.ts and src/codemode.ts", () => {
+    expect(agents).toMatch(/^\| `src\/mcp\.ts` \|.*`execute`/m);
+    expect(agents).toMatch(/^\| `src\/codemode\.ts` \|.*Code Mode/m);
   });
 });

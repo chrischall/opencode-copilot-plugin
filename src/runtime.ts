@@ -84,7 +84,7 @@ export async function startRuntime(rawOptions?: Record<string, unknown>): Promis
     // round trips, so it happens lazily on the first turn that carries tools.
     resolveAgent: () => getOrCreateAgent({ getTokenForScope: (scopes) => tokens.getTokenForScope(scopes) }),
     lean: options.lean,
-    mcp: options.mcp,
+    mcpProxy: options.mcpProxy,
     // Normally absent, so the proxy mints a fresh secret for this launch.
     ...(sharedKey ? { apiKey: sharedKey } : {}),
     ...(options.leanSystemPrompt ? { leanSystemPrompt: LEAN_SYSTEM_PROMPT } : {}),

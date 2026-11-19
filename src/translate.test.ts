@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { ToolDef } from "./fenced.js";
 import {
@@ -241,6 +242,15 @@ describe("condensing the harness system prompt", () => {
   it("drops opencode 2's Code Mode section when execute is not offered", () => {
     const condensed = condenseSystemPrompt(opencode2Prompt, leanFive);
     expect(condensed).not.toMatch(/Code Mode|execute|session_move/);
+    expect(condensed).toContain("# Your Model");
+    expect(condensed).toContain("Working directory: /tmp/w");
+  });
+
+  it("drops the whole Code Mode catalogue, even past a column-0 '# ' line in a doc comment", () => {
+    const section = readFileSync(new URL("../test/fixtures/opencode2-codemode.txt", import.meta.url), "utf8");
+    const prompt = `You are opencode.\n\n# Your Model\n- Model ID: quick\n${section}\n<env>\n  Working directory: /tmp/w\n</env>`;
+    const condensed = condenseSystemPrompt(prompt, leanFive);
+    expect(condensed).not.toMatch(/Code Mode|tools\.|Steps to reproduce|Post a message to a Slack channel/);
     expect(condensed).toContain("# Your Model");
     expect(condensed).toContain("Working directory: /tmp/w");
   });
@@ -538,7 +548,7 @@ describe("replaying history into a fresh conversation", () => {
   });
 
   it("renders a past call to a tool the turn no longer offers, from the history tools", () => {
-    // A tool an MCP search revealed earlier is not in this turn's tool block.
+    // A tool the request offers but this turn's tool block leaves out.
     const issueTool: ToolDef = {
       type: "function",
       function: {

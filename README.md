@@ -82,8 +82,10 @@ What gets dropped:
   tools were unusable. That section, any line naming `execute`, and the skills
   paragraph go with their tools, as do two harness lines that contradict the
   contract ("prefer parallelizing tool calls", "prefer dedicated tools over shell
-  commands"). On opencode 2.2.5 this takes the system prompt from about 8,000
-  characters to about 2,000.
+  commands"). The whole Code Mode section is removed, catalogue included, even when a
+  tool's description in it holds a line that looks like a heading. On opencode 2.2.5
+  this takes the system prompt from about 8,000 characters to about 2,000. To reach
+  MCP tools anyway, see [MCP tools](#mcp-tools).
 - **The harness's prose system prompt** — replaced with a short one, but **off by
   default**. A long, polished assistant prompt measurably reduces M365's tool
   compliance on another harness's numbers; that is a borrowed result we have not
@@ -166,15 +168,23 @@ is needed, because no run without it was tried.
 
 ## MCP tools
 
-The lean trim keeps about five tools, and that drops **every MCP tool** opencode
-offers (they arrive as `<server>_<tool>`, for example `github_create_issue`). Listing
-them all would put M365 back over the Disengaged threshold, so they are not offered
-directly. Instead, with `{ "mcp": true }` the proxy adds **one** extra fenced tool,
-`mcp`, which searches them. Its one-line description summarises what is behind the
-search, by server, so the model knows a search is worth making and which words to use:
+opencode 2 does not offer MCP tools as ordinary tools. It lists them in a **Code Mode**
+catalogue in the system prompt (`tools.github.create_issue({ … })` and so on, with
+opencode's own `opencode` namespace among them), and they can be called only as
+JavaScript inside its `execute` tool. The request's `tools` hold opencode's built-ins
+plus `execute`, whose one parameter is a string of code. The lean trim drops `execute`
+and the catalogue goes with it, so by default M365 reaches **no MCP tools** at all.
+Offering the catalogue as it is would put a long list of TypeScript signatures in front
+of M365 and push it back towards the Disengaged threshold.
+
+With `{ "mcpProxy": true }` the proxy stands in for the catalogue. M365 never sees
+`execute` or the catalogue, even with `lean` off: the catalogue is stripped from the
+prompt, and the proxy adds **one** extra fenced tool, `mcp`, as the only way to reach
+the MCP tools. Its one-line description summarises what is behind it, by server, so the
+model knows a search is worth making and which words to use:
 
 ```
-mcp — Find 14 more tools from my MCP servers — github (create_issue, list_issues, search_code, get_file, +6 more), slack (post_message, list_channels) — by searching with a few words about what you want to do; …
+mcp — Use 14 tools from my MCP servers — github (create_issue, list_issues, search_code, get_file, +6 more), slack (post_message, list_channels) — by searching with a few words about what you want to do; …
 ```
 
 The summary names up to four tools for each server and up to eight servers, and it is
@@ -186,39 +196,63 @@ search: create a github issue
 ```
 ````
 
-The proxy answers that search **itself**; it never reaches opencode. It ranks the MCP
-tools against the words (a hit in a tool's name counts more than one in its
-description) and sends the best five back to M365 in the same conversation, each
-written as its normal fence template. A search for a server's prefix, such as
-`github_`, lists that server's tools, also up to five. The model then calls the real tool with its own
-block:
+The proxy answers that search **itself**; it never reaches opencode. It ranks the
+catalogue against the words (a hit in a tool's name counts more than one in its
+description) and sends the best five back to M365 in the same conversation: each
+match's signature as opencode wrote it, then how to call one. A search for a server's
+prefix, such as `github.`, lists that server's tools, also up to five. The model then
+calls a tool through `mcp` with `call:` and the path the search showed, and its
+arguments as a JSON object:
 
 ````
-```github_create_issue
-owner: me
-repo: project
-title: The build fails on Node 22
+```mcp
+call: tools.github.create_issue
+{"owner": "me", "repo": "project", "title": "The build fails on Node 22"}
 ```
 ````
 
-Once a search has shown a tool, the proxy accepts that tool's block for the rest of
-the conversation and passes it to opencode as an ordinary tool call under its real
-name, so opencode runs it. M365 sees the lean set plus one tool however many MCP tools
-you have, and a found tool's template appears only in the search result, never in
-the per-turn tool list.
+Scalar arguments may instead be written as `key: value` lines, like any other fenced
+tool; a value that reads as a JSON number, boolean or null is passed as one:
 
-- **Opt-in.** `mcp` is `false` by default, and it only applies while `lean` is on
-  (without the trim nothing is deferred). A standalone `opencode-m365 serve` proxy
-  takes `M365_MCP=1` instead.
-- **Cost.** Each search is one extra M365 message in the same conversation, like the
-  give-up nudge; it does not start a new conversation.
-- **Cap.** At most 3 searches per request. A reply that is still a search after the
-  third is returned as its prose, and an `mcp` call never reaches opencode.
+````
+```mcp
+call: tools.github.get_issue
+owner: me
+repo: project
+issue_number: 42
+```
+````
+
+The proxy turns that block into an `execute` call for opencode to run, with the code
+`return await tools.github.create_issue({"owner":"me",…});`, and opencode's result comes
+back to M365 as an ordinary tool result. In the history M365 is sent, those `execute`
+calls are written back as the `mcp` blocks it wrote. A path that is not in the
+catalogue, or a block the proxy cannot read, is answered in the proxy with a short note
+on what to write instead; nothing reaches opencode. M365 sees the lean set plus one
+tool however many MCP tools you have.
+
+When opencode marks its catalogue as **partial** (it lists only some of its tools and
+offers a `search(...)` function for the rest), a search that matches nothing in the
+listed part goes to opencode's own search instead, as an `execute` call with the code
+`return await search("…");`. Its result comes back as a tool result, and a
+well-formed `tools.…` path it returns may then be called even though the catalogue does
+not list it.
+
+- **Opt-in.** `mcpProxy` is `false` by default. It takes effect when a request carries a
+  Code Mode catalogue and offers `execute`. A standalone `opencode-m365 serve` proxy
+  takes `M365_MCP_PROXY=1` instead.
+- **Cost.** Each search answered in the proxy is one extra M365 message in the same
+  conversation, like the give-up nudge; it does not start a new conversation. So is the
+  note for an unknown path or an unreadable block.
+- **Cap.** At most 3 searches per request, counting those notes. A reply that is still
+  an `mcp` block after the third is returned as its prose, and an `mcp` block never
+  reaches opencode as an `mcp` tool call.
 - **Not yet measured on a live tenant.** The flow is covered against the offline stub
   only; whether M365 searches and then calls reliably has not been measured.
 
 With `M365_TURN_LOG` set, each search is a turn of its own in the log, marked with
-`mcpSearch` and the query.
+`mcpSearch` and the query. A turn whose reply became an `execute` call is marked with
+`mcpCall` and the tool's path, or `search` when it went to opencode's own search.
 
 ## opencode 2
 
@@ -259,7 +293,7 @@ That stub run says nothing about Microsoft's side; see [Development](#developmen
     "options": {
       "lean": true,              // trim the toolset (default: true)
       "leanSystemPrompt": false, // replace opencode's prose prompt (default: false)
-      "mcp": false,              // offer MCP tools through one search tool (default: false)
+      "mcpProxy": false,         // reach MCP tools only through one `mcp` tool (default: false)
       "setDefaultModel": true,   // set `model` if you have not (default: true)
       "setSmallModel": true,     // answer session titles locally (default: true)
       "baseUrl": null,           // use an already-running proxy instead of an in-process one

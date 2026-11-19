@@ -25,9 +25,10 @@ measured against a live tenant:
 | `agent.<name>.prompt` from the `config` hook | Ignored the same way |
 
 The proxy sees the final OpenAI request. That is where `selectLeanTools` and
-`condenseSystemPrompt` run, and where anything similar should go. The `mcp` tool search
-is answered in the proxy for the same reason: the deferred MCP tools have to stay out of
-what M365 receives, and only the proxy controls that.
+`condenseSystemPrompt` run, and where anything similar should go. The `mcp` tool lives
+in the proxy for the same reason: opencode 2's Code Mode catalogue and its `execute`
+tool have to stay out of what M365 receives, and only the proxy controls that. M365's
+`mcp` searches are answered there, and its calls become `execute` calls the proxy emits.
 
 If you re-test these on a newer opencode and one starts working, say so in the README —
 do not silently move the logic back.
@@ -41,7 +42,8 @@ do not silently move the logic back.
 | `src/login.ts` | The browser sign-in. CLI-only, Playwright is an optional dependency |
 | `src/agent.ts` | Copilot Studio declarative agent: discovery, create, publish, hash-versioning |
 | `src/fenced.ts` | The fenced tool-call contract, both directions, plus the hardening layers |
-| `src/mcp.ts` | The opt-in `mcp` search tool: rank the deferred MCP tools, render the matches as fence templates |
+| `src/codemode.ts` | Parse opencode 2's Code Mode catalogue (the MCP tools, callable only in `execute`) and strip the whole section from the prompt |
+| `src/mcp.ts` | The opt-in `mcp` tool over that catalogue: summary, search, `call:` parsing, and the `execute` code templates and their inverse |
 | `src/image.ts` | Image input: collect `image_url` parts, upload to M365, build the annotation |
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |

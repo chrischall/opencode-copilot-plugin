@@ -14,6 +14,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { buildToolPrompt, parseToolCalls, renderToolCall, type ParsedToolCall, type ToolDef } from "./fenced.js";
+import { stripCodeModeSection } from "./codemode.js";
 import type { TurnResult } from "./session.js";
 
 // --- request schema -------------------------------------------------------------
@@ -216,7 +217,7 @@ export function condenseSystemPrompt(
     // opencode 2's Code Mode section says the listed tools only work inside `execute`.
     // Lean mode removes `execute`, so the section told the model its tools were unusable.
     if (!toolNames.has("execute")) {
-      text = text.replace(/^# Code Mode\n[\s\S]*?(?=^# |^Skills provide |^<[a-z_]+>|(?![\s\S]))/m, "");
+      text = stripCodeModeSection(text);
       text = dropLines(text, /`execute`/);
     }
     if (!toolNames.has("skill")) text = dropLines(text, /^Skills provide |\bskill tool\b|invoke a skill directly/);
@@ -333,10 +334,17 @@ export interface PromptOptions {
   sandbox?: string;
   /**
    * Tools a past call in the history may name, when that is more than this turn
-   * offers: a tool an MCP search revealed is callable but never in the tool block.
+   * offers: a tool the lean trim dropped, or `execute`, which the mcp proxy emits but
+   * never offers.
    * Defaults to the turn's own tools.
    */
   historyTools?: readonly ToolDef[];
+  /**
+   * Render a past call as the fence the model wrote, when the default rendering would
+   * not be it: the proxy turns an `mcp` block into an `execute` call, and the history
+   * has to show the `mcp` block again. Undefined falls back to the default.
+   */
+  renderCall?: (name: string, rawArguments: string) => string | undefined;
 }
 
 /**
@@ -405,7 +413,10 @@ export function buildTurnPrompt(
       const text = contentOf(message);
       if (text) parts.push(text);
       for (const call of message.tool_calls ?? []) {
-        parts.push(renderToolCall(call.function.name, call.function.arguments, options.historyTools ?? tools));
+        parts.push(
+          options.renderCall?.(call.function.name, call.function.arguments) ??
+            renderToolCall(call.function.name, call.function.arguments, options.historyTools ?? tools),
+        );
       }
       continue;
     }
@@ -479,6 +490,8 @@ export interface CompletionOptions {
   model: string;
   tools: readonly ToolDef[];
   allowMultiple?: boolean;
+  /** Calls already decided by the proxy, sent as they are instead of parsing the reply. */
+  toolCalls?: readonly ParsedToolCall[];
 }
 
 export interface ChatCompletion {
@@ -499,9 +512,9 @@ export interface ChatCompletion {
 }
 
 export function buildCompletion(result: TurnResult, options: CompletionOptions): ChatCompletion {
-  const { toolCalls, text } = parseToolCalls(result.text, options.tools, {
-    allowMultiple: options.allowMultiple ?? false,
-  });
+  const { toolCalls, text } = options.toolCalls
+    ? { toolCalls: options.toolCalls, text: "" }
+    : parseToolCalls(result.text, options.tools, { allowMultiple: options.allowMultiple ?? false });
 
   const hasCalls = toolCalls.length > 0;
   return {

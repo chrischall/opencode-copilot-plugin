@@ -52,7 +52,7 @@ function printHelp(): void {
   setup [--local]         Add the plugin to ~/.config/opencode/opencode.json
   serve [--port <n>]      Run the OpenAI-compatible proxy standalone
                           (key from M365_PROXY_KEY, else printed;
-                          M365_MCP=1 enables MCP tool search)
+                          M365_MCP_PROXY=1 enables the MCP proxy)
   doctor [--live]         Check auth, the agent, and the proxy
                           (--live also sends one short message per model tone)
 
@@ -160,8 +160,8 @@ async function doServe(args: string[]): Promise<void> {
     getToken: () => tokens.getToken(),
     resolveAgent: () => getOrCreateAgent({ getTokenForScope: (scopes) => tokens.getTokenForScope(scopes) }),
     port,
-    // `serve` takes no plugin options; like the key, MCP discovery comes from the env.
-    mcp: process.env.M365_MCP === "1",
+    // `serve` takes no plugin options; like the key, the MCP proxy comes from the env.
+    mcpProxy: process.env.M365_MCP_PROXY === "1",
     ...(fixedKey ? { apiKey: fixedKey } : {}),
   });
 
