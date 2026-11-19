@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildModelInfos } from "./config.js";
 import {
   DEFAULT_MODEL,
@@ -7,6 +7,8 @@ import {
   MODELS,
   isLocalModel,
   listModelIds,
+  AgentRouteMemory,
+  PREMIUM_ONLY_AGENT_TONES,
   resolveModel,
   toneFor,
   toolRouteFor,
@@ -270,9 +272,8 @@ describe("GPT-6 Sol models", () => {
     expect(resolveModel(`m365/${id}`).id).toBe(id);
   });
 
-  it.each(sol)("%s goes agent-less on tool turns, as a relay that steers it off its own sandbox", (_id, tone) => {
+  it.each(sol)("%s is framed as a relay that steers it off its own sandbox", (_id, tone) => {
     const route = toolRouteFor(tone);
-    expect(route.agent).toBe(false);
     expect(route.framing).toBe("relay");
     expect(route.sandbox).toMatch(/\/mnt\/data/);
   });
@@ -379,5 +380,69 @@ describe("the models the reference project maps", () => {
       expect(info!.capabilities.tools).toBe(true);
       expect(info!.name).toBe(resolveModel(row.id).name);
     }
+  });
+});
+
+describe("the learned agent route for GPT-6 Sol and GPT-6.1 Sol", () => {
+  // The reference project's PREMIUM_ONLY_AGENT_TONES: the agent serves these tones only
+  // on a premium account, and nothing on the token says which kind of account it is.
+  afterEach(() => {
+    delete process.env.M365_FORCE_AGENT;
+  });
+
+  const learned = ["Gpt_6_Sol_Reasoning", "Gpt_61_Sol_Reasoning"];
+
+  it("covers exactly Sol 6 and 6.1", () => {
+    expect([...PREMIUM_ONLY_AGENT_TONES].sort()).toEqual([...learned].sort());
+  });
+
+  it.each(learned)("tries the agent first on %s", (tone) => {
+    const memory = new AgentRouteMemory();
+    expect(toolRouteFor(tone, memory).agent).toBe(true);
+    expect(toolRouteFor(tone).agent).toBe(true);
+  });
+
+  it.each(learned)("goes agent-less on %s once the route proved dead, and only for that tone", (tone) => {
+    const memory = new AgentRouteMemory();
+    expect(memory.noteDead(tone)).toBe(true);
+    expect(toolRouteFor(tone, memory)).toEqual({ framing: "relay", agent: false, sandbox: toolRouteFor(tone).sandbox });
+    const other = learned.find((candidate) => candidate !== tone)!;
+    expect(toolRouteFor(other, memory).agent).toBe(true);
+    expect(toolRouteFor(tone, new AgentRouteMemory()).agent).toBe(true);
+  });
+
+  it("will not mark a route dead once the agent has answered for that tone", () => {
+    const memory = new AgentRouteMemory();
+    memory.noteAlive("Gpt_6_Sol_Reasoning");
+    expect(memory.isAlive("Gpt_6_Sol_Reasoning")).toBe(true);
+    expect(memory.noteDead("Gpt_6_Sol_Reasoning")).toBe(false);
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(true);
+    expect(memory.noteDead("Gpt_61_Sol_Reasoning")).toBe(true);
+  });
+
+  it("M365_FORCE_AGENT=0 never attaches the agent, =1 attaches it even after a dead route", () => {
+    const memory = new AgentRouteMemory();
+    process.env.M365_FORCE_AGENT = "0";
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(false);
+    memory.noteDead("Gpt_6_Sol_Reasoning");
+    process.env.M365_FORCE_AGENT = "1";
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(true);
+  });
+
+  it("keeps GPT-6.2 Sol and the Astra tones agent-less whatever is learned or forced", () => {
+    for (const force of [undefined, "0", "1"]) {
+      if (force === undefined) delete process.env.M365_FORCE_AGENT;
+      else process.env.M365_FORCE_AGENT = force;
+      for (const tone of ["Gpt_62_Sol_Reasoning", "Gpt_62_Astra_Reasoning", "Gpt_6_Astra_Reasoning"]) {
+        expect(toolRouteFor(tone, new AgentRouteMemory()).agent).toBe(false);
+      }
+    }
+  });
+
+  it("leaves every other tone to its fixed route, whatever M365_FORCE_AGENT says", () => {
+    process.env.M365_FORCE_AGENT = "0";
+    expect(toolRouteFor("Gpt_5_5_Chat").agent).toBe(true);
+    process.env.M365_FORCE_AGENT = "1";
+    expect(toolRouteFor("Claude_Sonnet").agent).toBe(false);
   });
 });

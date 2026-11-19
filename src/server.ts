@@ -15,7 +15,16 @@ import type { AddressInfo } from "node:net";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { AuthRequiredError } from "./auth.js";
 import type { ParsedToolCall, ToolDef } from "./fenced.js";
-import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel, toolRouteFor } from "./models.js";
+import {
+  AgentRouteMemory,
+  DEFAULT_MODEL,
+  PREMIUM_ONLY_AGENT_TONES,
+  forcedAgent,
+  isLocalModel,
+  listModelIds,
+  resolveModel,
+  toolRouteFor,
+} from "./models.js";
 import { describeToolSelection, selectLeanTools } from "./config.js";
 import { parseCodeModeCatalog, type CodeModeCatalog } from "./codemode.js";
 import {
@@ -32,7 +41,15 @@ import {
   searchCatalog,
   searchCode,
 } from "./mcp.js";
-import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, TurnRejectedError, type TurnResult } from "./session.js";
+import {
+  CopilotSession,
+  DisengagedError,
+  EmptyInternalError,
+  M365ThrottledError,
+  M365UnavailableError,
+  TurnRejectedError,
+  type TurnResult,
+} from "./session.js";
 import { createPrivateAppender } from "./private-fs.js";
 import {
   ChatCompletionRequest,
@@ -212,9 +229,12 @@ export async function startServer(deps: ServerDeps): Promise<ProxyHandle> {
     return agentPromise;
   };
 
+  // What this account's agent route serves, learned per tone (models.ts).
+  const agentRoutes = new AgentRouteMemory();
+
   const portOf = () => (server.address() as AddressInfo).port;
   const server = createServer((request, response) => {
-    handle(request, response, { deps, pool, agentId, apiKey, maxBodyBytes, port: portOf() }).catch((error) => {
+    handle(request, response, { deps, pool, agentId, agentRoutes, apiKey, maxBodyBytes, port: portOf() }).catch((error) => {
       log.error("unhandled request failure", String(error));
       sendError(response, 500, "internal_error", String(error));
     });
@@ -243,6 +263,7 @@ interface Context {
   deps: ServerDeps;
   pool: ConversationPool;
   agentId: () => Promise<string | null>;
+  agentRoutes: AgentRouteMemory;
   apiKey: string;
   maxBodyBytes: number;
   port: number;
@@ -477,24 +498,27 @@ async function runTurn(
   const clientTools = mcp ? effectiveTools.filter((tool) => tool.function.name !== MCP_TOOL_NAME) : effectiveTools;
   const executeName = requested.find(isExecute)?.function.name ?? EXECUTE_TOOL_NAME;
 
-  // Only the messages this turn carries: M365 already has any earlier image.
-  const images = collectImages(body.messages, conversation.sentMessageCount);
   const note = effectiveTools.length > 0 && conversation.sentMessageCount > 0 ? conversation.note : undefined;
   conversation.note = undefined;
-  const route = toolRouteFor(model.tone);
-  const prompt = buildTurnPrompt(mcp ? relabelProxyCalls(body.messages) : body.messages, effectiveTools, conversation.sentMessageCount, {
-    framing: route.framing,
-    ...(route.sandbox ? { sandbox: route.sandbox } : {}),
-    ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
-    ...(note ? { note } : {}),
-    // A past call may name a tool this turn's tool block leaves out.
-    ...(effectiveTools.length > 0 ? { historyTools: [...effectiveTools, ...requested] } : {}),
-    ...(mcp ? { renderCall: renderProxyCall } : {}),
-  });
+  let route = toolRouteFor(model.tone, context.agentRoutes);
+  // From `sent` on: the delta for this conversation, or 0 for the whole request.
+  const promptFrom = (sent: number) =>
+    buildTurnPrompt(mcp ? relabelProxyCalls(body.messages) : body.messages, effectiveTools, sent, {
+      framing: route.framing,
+      ...(route.sandbox ? { sandbox: route.sandbox } : {}),
+      ...(context.deps.leanSystemPrompt !== undefined ? { leanSystemPrompt: context.deps.leanSystemPrompt } : {}),
+      ...(note ? { note } : {}),
+      // A past call may name a tool this turn's tool block leaves out.
+      ...(effectiveTools.length > 0 ? { historyTools: [...effectiveTools, ...requested] } : {}),
+      ...(mcp ? { renderCall: renderProxyCall } : {}),
+    });
+  // Only the messages this turn carries: M365 already has any earlier image.
+  let images = collectImages(body.messages, conversation.sentMessageCount);
+  let prompt = promptFrom(conversation.sentMessageCount);
 
   // The agent overrides the tone and forces GPT, so attach it only when the turn
   // actually needs tool instructions. Plain chat then reaches the tone's real model.
-  const agent = effectiveTools.length > 0 && route.agent ? await context.agentId() : null;
+  let agent = effectiveTools.length > 0 && route.agent ? await context.agentId() : null;
 
   const abort = new AbortController();
   request.on("close", () => {
@@ -523,7 +547,7 @@ async function runTurn(
       ...fields,
     });
 
-  const turnOptions = {
+  let turnOptions = {
     ...(model.tone ? { tone: model.tone } : {}),
     agentId: agent,
     ...(model.grounded ? { grounded: true } : {}),
@@ -542,15 +566,52 @@ async function runTurn(
       ...extra,
     });
 
-  let logged: Partial<TurnLogEntry> = {};
-  try {
-    let result = await conversation.session.run(prompt, {
+  const session = conversation.session;
+  const firstTurn = () =>
+    session.run(prompt, {
       ...turnOptions,
       ...(images.length > 0 ? { images } : {}),
       ...(canStreamText
         ? { onDelta: (chunk: string) => response.write(streamChunk(streamId, model.id, { content: chunk })) }
         : {}),
     });
+
+  let logged: Partial<TurnLogEntry> = {};
+  try {
+    let result: TurnResult;
+    try {
+      result = await firstTurn();
+    } catch (error) {
+      // GPT-6 Sol and 6.1 Sol take the agent only on a premium account; on any other,
+      // the agent turn is a dead route (`InternalError`, no content). Learn that for
+      // the proxy's life and re-send the whole request agent-less in a fresh
+      // conversation: the dead turn processed nothing, so a delta would have no
+      // context. Once per request, never under M365_FORCE_AGENT=1, and never once the
+      // agent has answered for the tone (then it is a one-off refusal).
+      const tone = model.tone;
+      if (
+        !(error instanceof EmptyInternalError) ||
+        !agent ||
+        !tone ||
+        !PREMIUM_ONLY_AGENT_TONES.has(tone) ||
+        forcedAgent() === true ||
+        !context.agentRoutes.noteDead(tone)
+      ) {
+        throw error;
+      }
+      logTurn({ error: `${error.name}: ${error.message}`, resultValue: "InternalError" });
+      log.info(`agent route dead for ${tone}; this account is not premium. Re-sending agent-less in a fresh conversation`);
+      route = toolRouteFor(tone, context.agentRoutes);
+      agent = null;
+      turnOptions = { ...turnOptions, agentId: null };
+      session.reset();
+      conversation.sentMessageCount = 0;
+      images = collectImages(body.messages, 0);
+      prompt = promptFrom(0);
+      result = await firstTurn();
+    }
+    // The agent answered for this tone on this account: a later InternalError is a one-off.
+    if (agent && model.tone) context.agentRoutes.noteAlive(model.tone);
 
     // A tool turn answered with "I have no tools" is a stochastic give-up, not an
     // answer: ask once more in the same conversation, which costs a message but

@@ -154,6 +154,20 @@ export class PremiumLicenceRequiredError extends M365UnavailableError {
   }
 }
 
+/**
+ * `result: InternalError` with no content in the update frames, only (at most) an
+ * apology in the final item. It is how a dead agent route looks on a tone whose agent
+ * serves only on a premium account, so the server can tell it apart and re-send the
+ * turn agent-less (`PREMIUM_ONLY_AGENT_TONES` in models.ts). Anywhere else it is an
+ * ordinary refusal.
+ */
+export class EmptyInternalError extends M365UnavailableError {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "EmptyInternalError";
+  }
+}
+
 /** Which priority-access allowance ran out. */
 export type AllowanceWindow = "day" | "week";
 
@@ -383,6 +397,9 @@ export class CopilotSession {
     return new Promise<TurnResult>((resolve, reject) => {
       let deltaText = "";
       let snapshotText = "";
+      // Any answer text in the update frames. The final item's own text does not count:
+      // a dead route carries its apology there and nowhere else.
+      let streamedContent = false;
       let handshakeDone = false;
       let settled = false;
       const result: TurnResult = { text: "" };
@@ -400,7 +417,7 @@ export class CopilotSession {
         // Only a grounded turn carries citation tokens; a coding answer is passed
         // through verbatim so its indentation and tool-call fences are never touched.
         const raw = deltaText.length >= snapshotText.length ? deltaText : snapshotText;
-        const refusal = refusalOf(result, raw);
+        const refusal = refusalOf(result, raw, streamedContent);
         if (refusal) {
           reject(refusal);
           return;
@@ -454,6 +471,7 @@ export class CopilotSession {
                     return;
                   }
                   deltaText += applied.delta;
+                  if (applied.delta || applied.snapshot) streamedContent = true;
                   if (applied.snapshot.length > snapshotText.length) snapshotText = applied.snapshot;
                 }
               }
@@ -641,11 +659,12 @@ interface OutgoingMessage {
  * M365's own refusal, when that is what arrived instead of an answer. Its text reads
  * like a reply, so returned as one it would end opencode's loop on an apology.
  */
-function refusalOf(result: TurnResult, text: string): Error | undefined {
+function refusalOf(result: TurnResult, text: string, streamedContent: boolean): Error | undefined {
   const detail = [result.errorCode, text.trim()].filter(Boolean).join(": ") || result.resultValue || "no reason given";
   if (result.resultValue === "Throttled") return new M365ThrottledError(detail);
   if (result.resultValue === "OutOfCredits") return new PriorityAccessExhaustedError(text.trim());
   if (result.errorCode === "InvalidCopilotLicense") return new PremiumLicenceRequiredError(text.trim());
+  if (result.resultValue === "InternalError" && !streamedContent) return new EmptyInternalError(detail);
   if (result.resultValue && result.resultValue !== "Success") return new M365UnavailableError(detail);
   // A tone that is registered but dead answers with a canned apology from here.
   if (result.contentOrigin === "BotConnection") return new M365UnavailableError(`registered but dead (BotConnection): ${detail}`);

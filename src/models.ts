@@ -89,8 +89,9 @@ export const MODELS: readonly ModelInfo[] = [
   m("work", "Ask your mail, Teams & files", "magic", false, { grounded: true }),
   m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, { grounded: true }),
   // GPT-6 Sol: reasoning models on the included scenario, so every account can reach
-  // them. They take the tool agent only on a premium account, so tool turns go
-  // agent-less (see `toolRouteFor`). Tool use not yet measured here.
+  // them. GPT-6 and 6.1 Sol take the tool agent only on a premium account, which is
+  // learned by trying; GPT-6.2 Sol goes agent-less (see `toolRouteFor`). Tool use not
+  // yet measured here.
   m("gpt-6.2-sol", "GPT-6.2 Sol", "Gpt_62_Sol_Reasoning", true),
   // GPT-6.2 Astra: the included scenario, like GPT-6.2 Sol, but every turn is charged
   // to the user's Copilot credits.
@@ -269,11 +270,11 @@ export interface ToolRoute {
  *   models take the agent, and Opus 4.8 without it works in its own code interpreter.
  * - GPT-6 (`Gpt_6_Reasoning`) is the same dead route with the agent on every account,
  *   premium or not; agent-less it answers. The Astra tones go agent-less too.
- * - GPT-6 Sol tones serve with the agent only on a premium account, and nothing on the
- *   token says which kind of account it is, so they go agent-less. Agent-less, Sol
- *   runs commands in a remote bash sandbox of its own, so the relay note names it and
- *   asks for the user's terminal instead (the Sol rows and quirk #21). GPT-6.2 Astra
- *   is routed like GPT-6.2 Sol.
+ * - Sol tones run commands in a remote bash sandbox of their own when agent-less, so
+ *   the relay note names it and asks for the user's terminal instead (the Sol rows and
+ *   quirk #21). GPT-6 Sol and GPT-6.1 Sol serve with the agent only on a premium
+ *   account, so whether they get it is learned (`PREMIUM_ONLY_AGENT_TONES`). GPT-6.2
+ *   Sol always goes agent-less, and GPT-6.2 Astra is routed like it.
  */
 const SOL_TONE = /^Gpt_\d+_Sol_Reasoning$/;
 const SOL_SANDBOX = "the bash sandbox with /mnt/data and /home/oai";
@@ -281,7 +282,68 @@ const SANDBOXED_TONES: ReadonlySet<string> = new Set(["Gpt_62_Astra_Reasoning"])
 const AGENTLESS_TONES: ReadonlySet<string> = new Set(["Gpt_6_Reasoning", "Gpt_6_Astra_Reasoning"]);
 const AGENT_CLAUDE_TONES: ReadonlySet<string> = new Set(["Claude_Opus"]);
 
-export function toolRouteFor(tone: string | null): ToolRoute {
+/**
+ * Tones whose agent route serves only on a premium account (the reference project's
+ * `PREMIUM_ONLY_AGENT_TONES`, agent-tone-probe 2026-10-02 and 2026-10-06). On a
+ * non-premium account the agent-attached turn is a dead route: a BotConnection
+ * apology in the final item, `result: InternalError`, no content. Agent-less, the same
+ * tone serves on either account.
+ *
+ * Nothing on the token says which kind of account it is, so the proxy finds out by
+ * trying: the first tool turn carries the agent, and a dead route marks the tone
+ * agent-dead (`AgentRouteMemory`) and is re-sent agent-less. A premium account
+ * produces the same wire state as a rare one-off (about 1 in 250 agent turns), so once
+ * the agent has answered for a tone, an `InternalError` is just a refusal.
+ *
+ * `M365_FORCE_AGENT` overrides this for these tones only: `0` never attaches the
+ * agent, `1` always does and never falls back.
+ */
+export const PREMIUM_ONLY_AGENT_TONES: ReadonlySet<string> = new Set(["Gpt_6_Sol_Reasoning", "Gpt_61_Sol_Reasoning"]);
+
+/**
+ * What one proxy has learned about the agent route, per tone. A proxy serves one
+ * account, so this is per-account knowledge; a restart learns it again.
+ */
+export class AgentRouteMemory {
+  private readonly dead = new Set<string>();
+  private readonly alive = new Set<string>();
+
+  /**
+   * Record that this account's agent route does not serve `tone`. Returns false, and
+   * records nothing, when the agent has already answered for it: then the failure
+   * was a one-off.
+   */
+  noteDead(tone: string): boolean {
+    if (this.alive.has(tone)) return false;
+    this.dead.add(tone);
+    return true;
+  }
+
+  /** Record that the agent answered for `tone` on this account. */
+  noteAlive(tone: string): void {
+    this.alive.add(tone);
+  }
+
+  isAlive(tone: string): boolean {
+    return this.alive.has(tone);
+  }
+
+  isDead(tone: string): boolean {
+    return this.dead.has(tone);
+  }
+}
+
+/** `M365_FORCE_AGENT`: `true` for `1`, `false` for `0`, otherwise undecided. */
+export function forcedAgent(): boolean | undefined {
+  const force = process.env.M365_FORCE_AGENT;
+  return force === "1" ? true : force === "0" ? false : undefined;
+}
+
+export function toolRouteFor(tone: string | null, memory?: AgentRouteMemory): ToolRoute {
+  if (tone && PREMIUM_ONLY_AGENT_TONES.has(tone)) {
+    const agent = forcedAgent() ?? !memory?.isDead(tone);
+    return { framing: "relay", agent, sandbox: SOL_SANDBOX };
+  }
   if (tone && (SOL_TONE.test(tone) || SANDBOXED_TONES.has(tone))) return { framing: "relay", agent: false, sandbox: SOL_SANDBOX };
   if (tone && AGENTLESS_TONES.has(tone)) return { framing: "relay", agent: false };
   if (tone?.startsWith("Claude_")) return { framing: "relay", agent: AGENT_CLAUDE_TONES.has(tone) };

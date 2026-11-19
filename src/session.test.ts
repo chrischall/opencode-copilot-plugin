@@ -12,6 +12,7 @@ import {
 import {
   CopilotSession,
   DisengagedError,
+  EmptyInternalError,
   M365ThrottledError,
   M365UnavailableError,
   PremiumLicenceRequiredError,
@@ -427,6 +428,22 @@ describe("failure modes", () => {
     const failure = sessionFor(stub).run("hi");
     await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
     await expect(failure).rejects.toThrow(/Premium license/);
+  });
+
+  it("marks an InternalError with nothing in the update frames, which is how a dead agent route looks", async () => {
+    stub = await startStubCopilot({ respond: () => [verdict("InternalError", "Sorry, something went wrong."), completion()] });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(EmptyInternalError);
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+  });
+
+  it("does not mark an InternalError that came after streamed content", async () => {
+    stub = await startStubCopilot({
+      respond: () => [delta("Partial answer"), verdict("InternalError", "Sorry, something went wrong."), completion()],
+    });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+    await expect(failure).rejects.not.toBeInstanceOf(EmptyInternalError);
   });
 
   it("raises the paid scenario's licence refusal as a premium-licence refusal", async () => {

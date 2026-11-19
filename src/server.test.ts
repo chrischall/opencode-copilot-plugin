@@ -792,11 +792,10 @@ describe("tool turns per tone", () => {
     expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
   });
 
-  it("sends a Sol tool turn agent-less, as a relay that names its sandbox", async () => {
-    // A non-premium account answers Sol with the agent attached on a dead route.
+  it("sends a GPT-6.2 Sol tool turn agent-less, as a relay that names its sandbox", async () => {
     stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
     const { url } = await start();
-    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    await post(url, { model: "gpt-6.2-sol", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
     expect(chatArg().threadLevelGptId).toBeUndefined();
     expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
     expect(chatArg().message.text).toMatch(/\/mnt\/data/);
@@ -934,6 +933,126 @@ describe("refusals opencode must not retry", () => {
       expect(opencodeWouldRetry(422, (await response.json()) as any)).toBe(false);
     });
   }
+});
+
+describe("the learned agent route for GPT-6 Sol and GPT-6.1 Sol", () => {
+  // A non-premium account answers these tones with the agent attached on a dead route:
+  // a BotConnection apology in the final item, `InternalError`, no content.
+  const deadRoute = () => [
+    {
+      type: 2,
+      item: {
+        messages: [{ author: "bot", text: "Sorry, something went wrong.", contentOrigin: "BotConnection" }],
+        result: { value: "InternalError", message: "Sorry, something went wrong." },
+      },
+    },
+    completion(),
+  ];
+  const served = () => [streamItem("```bash\nls\n```"), completion()];
+  const chatOf = (index: number) => stub!.connections[index]!.frames.find((f) => f.type === 4).arguments[0];
+  const conversationOf = (index: number) => new URL(stub!.connections[index]!.url, "http://x").searchParams.get("ConversationId");
+
+  afterEach(() => {
+    delete process.env.M365_FORCE_AGENT;
+  });
+
+  /** Answer each connection in turn from `script`; the last entry repeats. */
+  const scripted = (...script: Array<() => unknown[]>) => {
+    let calls = 0;
+    return () => script[Math.min(calls++, script.length - 1)]!();
+  };
+
+  it.each(["gpt-6-sol", "gpt-6.1-sol"])("tries the agent on the first %s tool turn", async (model) => {
+    stub = await startStubCopilot({ respond: served });
+    const { url } = await start();
+    const response = await post(url, { model, messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    expect(((await response.json()) as any).choices[0].message.tool_calls[0].function.name).toBe("bash");
+    expect(chatOf(0).threadLevelGptId).toBeDefined();
+    expect(chatOf(0).message.text).toMatch(/guide me through this from my terminal/);
+  });
+
+  it("re-sends a dead agent route agent-less in a fresh conversation, and stays agent-less", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const first = [
+      { role: "user", content: "list" },
+      { role: "assistant", content: "Sure." },
+      { role: "user", content: "now list again" },
+    ];
+    const response = await post(url, { model: "gpt-6.1-sol", messages: first, tools: [bashTool] });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as any).choices[0].message.tool_calls[0].function.name).toBe("bash");
+
+    expect(stub.connections).toHaveLength(2);
+    expect(chatOf(0).threadLevelGptId).toBeDefined();
+    expect(chatOf(1).threadLevelGptId).toBeUndefined();
+    expect(conversationOf(1)).not.toBe(conversationOf(0));
+    // The whole request, since the fresh conversation has none of it.
+    expect(chatOf(1).message.text).toContain("now list again");
+    expect(chatOf(1).message.text).toContain("Sure.");
+
+    // The next tool turn on that tone goes agent-less from the start.
+    await post(url, {
+      model: "gpt-6.1-sol",
+      messages: [{ role: "user", content: "other session" }],
+      tools: [bashTool],
+    });
+    expect(stub.connections).toHaveLength(3);
+    expect(chatOf(2).threadLevelGptId).toBeUndefined();
+  });
+
+  it("learns per tone: GPT-6 Sol still tries the agent after GPT-6.1 Sol's route died", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(chatOf(2).threadLevelGptId).toBeDefined();
+  });
+
+  it("treats an InternalError as a transient refusal once the agent has answered for the tone", async () => {
+    stub = await startStubCopilot({ respond: scripted(served, deadRoute) });
+    const { url } = await start();
+    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    const response = await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as any).error.code).toBe("m365_not_served");
+    expect(stub.connections).toHaveLength(2);
+    expect(chatOf(1).threadLevelGptId).toBeDefined();
+  });
+
+  it("does not fall back on a tone outside the learned set", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const response = await post(url, { model: "gpt-5.5-think-deeper", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("M365_FORCE_AGENT=1 never falls back", async () => {
+    process.env.M365_FORCE_AGENT = "1";
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const response = await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as any).error.code).toBe("m365_not_served");
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("M365_FORCE_AGENT=0 never attaches the agent", async () => {
+    process.env.M365_FORCE_AGENT = "0";
+    stub = await startStubCopilot({ respond: served });
+    const { url } = await start();
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(stub.connections).toHaveLength(1);
+    expect(chatOf(0).threadLevelGptId).toBeUndefined();
+  });
+
+  it("does not attach the agent to a Sol turn without tools", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("hi"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "hi" }] });
+    expect(chatOf(0).threadLevelGptId).toBeUndefined();
+  });
 });
 
 describe("failures the client has to be able to tell apart", () => {
