@@ -153,6 +153,10 @@ describe("argumentNames", () => {
     expect(argumentNames(byName("search-code").signature)).toEqual(["q"]);
   });
 
+  it("does not let a function type's => close the parameter list", () => {
+    expect(argumentNames("function f(params: { cb: (x: string) => void, after: number }): void")).toEqual(["cb", "after"]);
+  });
+
   it("returns nothing for a tool with no parameters", () => {
     expect(argumentNames(byName("worktree_list").signature)).toEqual([]);
   });
@@ -212,6 +216,16 @@ describe("parseMcpBlock", () => {
       kind: "call",
       path: "tools.opencode.models",
       args: { query: "gpt", limit: 5, all: true, provider: null, name: "x y" },
+    });
+  });
+
+  it("keeps header values that are not JSON numbers as strings", () => {
+    expect(
+      parseMcpBlock("call: tools.opencode.models\nzip: 02134\nid: 0x1F\nbin: 0b11\nsp: 1_000\ninf: Infinity\ndot: .5\nplus: +3\nneg: -1.5e3"),
+    ).toEqual({
+      kind: "call",
+      path: "tools.opencode.models",
+      args: { zip: "02134", id: "0x1F", bin: "0b11", sp: "1_000", inf: "Infinity", dot: ".5", plus: "+3", neg: -1500 },
     });
   });
 

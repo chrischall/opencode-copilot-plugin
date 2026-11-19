@@ -186,7 +186,7 @@ export function argumentNames(signature: string): string[] {
     if ("({[<".includes(char)) {
       depth++;
       token = "";
-    } else if (")}]>".includes(char)) {
+    } else if (")}]".includes(char) || (char === ">" && signature[i - 1] !== "=")) {
       depth--;
       if (depth === 0) break;
       token = "";
@@ -231,6 +231,9 @@ export function renderSearchResult(query: string, matches: readonly CatalogTool[
 
 // --- calling -------------------------------------------------------------------------
 
+/** The JSON number grammar: no leading zeros, hex, `+`, bare `.5` or `Infinity`. */
+const JSON_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
 /** A header value's own type: a JSON number, boolean or null is coerced; quotes are unwrapped. */
 function headerValue(raw: string): unknown {
   const value = raw.trim();
@@ -245,7 +248,7 @@ function headerValue(raw: string): unknown {
   if (value === "true") return true;
   if (value === "false") return false;
   if (value === "null") return null;
-  if (value !== "" && Number.isFinite(Number(value))) return Number(value);
+  if (JSON_NUMBER.test(value)) return Number(value);
   return value;
 }
 
