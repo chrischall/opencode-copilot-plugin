@@ -17,7 +17,12 @@ import { AuthRequiredError } from "./auth.js";
 import type { ToolDef } from "./fenced.js";
 import { DEFAULT_MODEL, isLocalModel, listModelIds, resolveModel, toolRouteFor } from "./models.js";
 import { describeToolSelection, selectDeferredTools, selectLeanTools } from "./config.js";
-import { MCP_TOOL_NAME, mcpTool, renderSearchResult, searchTools } from "./mcp.js";
+import {
+  MCP_TOOL_NAME,
+  deferredMcpTool as mcpTool,
+  renderDeferredSearchResult as renderSearchResult,
+  searchTools,
+} from "./mcp.js";
 import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, TurnRejectedError, type TurnResult } from "./session.js";
 import { createPrivateAppender } from "./private-fs.js";
 import {
