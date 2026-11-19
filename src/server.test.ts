@@ -79,6 +79,16 @@ describe("service endpoints", () => {
     for (const alias of ["auto", "claude", "gpt-5.4", "gpt-5.3", "gpt-5.2"]) expect(ids).not.toContain(alias);
   });
 
+  it("lists the paid, credit-billed and metered models, not their aliases", async () => {
+    const { url } = await start();
+    const body: any = await (await authedFetch(`${url}/v1/models`)).json();
+    const ids = body.data.map((m: any) => m.id);
+    for (const id of ["gpt-6-think-deeper", "gpt-6-astra", "gpt-6.2-astra", "claude-opus", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-fable"]) {
+      expect(ids).toContain(id);
+    }
+    for (const alias of ["claude-opus-5.5", "claude-opus-4.5", "claude-sonnet-4.6", "claude-fable-5.1"]) expect(ids).not.toContain(alias);
+  });
+
   it("404s an unknown path instead of hanging", async () => {
     const { url } = await start();
     expect((await authedFetch(`${url}/nope`)).status).toBe(404);
@@ -782,14 +792,43 @@ describe("tool turns per tone", () => {
     expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
   });
 
-  it("sends a Sol tool turn agent-less, as a relay that names its sandbox", async () => {
-    // A non-premium account answers Sol with the agent attached on a dead route.
+  it("sends a GPT-6.2 Sol tool turn agent-less, as a relay that names its sandbox", async () => {
     stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
     const { url } = await start();
-    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    await post(url, { model: "gpt-6.2-sol", messages: [{ role: "user", content: "list" }], tools: [bashTool] });
     expect(chatArg().threadLevelGptId).toBeUndefined();
     expect(chatArg().message.text).toMatch(/guide me through this from my terminal/);
     expect(chatArg().message.text).toMatch(/\/mnt\/data/);
+  });
+
+  const cases: Array<[model: string, scenario: string, agent: boolean]> = [
+    ["claude-opus", "OfficeWebPaidCopilot", true],
+    ["claude-opus-4.8", "OfficeWebIncludedCopilot", true],
+    ["claude-sonnet-5.5", "OfficeWebPaidCopilot", false],
+    ["claude-sonnet-5", "OfficeWebPaidCopilot", false],
+    ["claude-sonnet", "OfficeWebIncludedCopilot", false],
+    ["claude-fable", "OfficeWebIncludedCopilot", false],
+    ["gpt-6-think-deeper", "OfficeWebPaidCopilot", false],
+    ["gpt-6-astra", "OfficeWebPaidCopilot", false],
+    ["gpt-6.2-astra", "OfficeWebIncludedCopilot", false],
+    ["quick", "OfficeWebIncludedCopilot", true],
+  ];
+
+  it.each(cases)("sends a %s tool turn on %s, agent attached: %s", async (model, scenario, agent) => {
+    stub = await startStubCopilot({ respond: () => [streamItem("```bash\nls\n```"), completion()] });
+    const { url } = await start();
+    await post(url, { model, messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    const query = new URL(stub.last().url, "http://x").searchParams;
+    expect(query.get("scenario")).toBe(scenario);
+    expect(query.get("licenseType")).toBe(scenario === "OfficeWebPaidCopilot" ? "Premium" : null);
+    expect(chatArg().threadLevelGptId === undefined).toBe(!agent);
+  });
+
+  it("sends a paid model's plain chat on the paid scenario too", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("ok"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "claude-sonnet-5.5", messages: [{ role: "user", content: "hi" }] });
+    expect(new URL(stub.last().url, "http://x").searchParams.get("scenario")).toBe("OfficeWebPaidCopilot");
   });
 
   it("leaves the default model as it was", async () => {
@@ -831,6 +870,9 @@ describe("the turn log", () => {
   });
 });
 
+const OPUS_DAILY =
+  "You've used your available priority access to the Opus model for today. You can choose another available model or wait until tomorrow to use the Opus model again.";
+
 describe("refusals opencode must not retry", () => {
   // opencode always streams, so a refusal reaches it inside a 200 stream, and it then
   // decides from the error's code and wording alone. 2.2.0 got that wrong: a licence
@@ -848,6 +890,20 @@ describe("refusals opencode must not retry", () => {
           result: { value: "InternalError", message: "ClaudeUnavailableForLicense: Claude isn't available with your current license. Choose another model and try again." },
         },
       },
+      completion(),
+    ],
+    "licence (paid scenario)": () => [
+      {
+        type: 2,
+        item: {
+          messages: [{ author: "bot", text: "It looks like you don't have a valid licence. Please try again later.", contentOrigin: "BotConnection" }],
+          result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "It looks like you don't have a valid licence." },
+        },
+      },
+      completion(),
+    ],
+    "priority access exhausted": () => [
+      { type: 2, item: { messages: [], result: { value: "OutOfCredits", message: OPUS_DAILY, creditScenario: "TotalTurn" } } },
       completion(),
     ],
     disengaged: () => [disengaged(), completion()],
@@ -877,6 +933,126 @@ describe("refusals opencode must not retry", () => {
       expect(opencodeWouldRetry(422, (await response.json()) as any)).toBe(false);
     });
   }
+});
+
+describe("the learned agent route for GPT-6 Sol and GPT-6.1 Sol", () => {
+  // A non-premium account answers these tones with the agent attached on a dead route:
+  // a BotConnection apology in the final item, `InternalError`, no content.
+  const deadRoute = () => [
+    {
+      type: 2,
+      item: {
+        messages: [{ author: "bot", text: "Sorry, something went wrong.", contentOrigin: "BotConnection" }],
+        result: { value: "InternalError", message: "Sorry, something went wrong." },
+      },
+    },
+    completion(),
+  ];
+  const served = () => [streamItem("```bash\nls\n```"), completion()];
+  const chatOf = (index: number) => stub!.connections[index]!.frames.find((f) => f.type === 4).arguments[0];
+  const conversationOf = (index: number) => new URL(stub!.connections[index]!.url, "http://x").searchParams.get("ConversationId");
+
+  afterEach(() => {
+    delete process.env.M365_FORCE_AGENT;
+  });
+
+  /** Answer each connection in turn from `script`; the last entry repeats. */
+  const scripted = (...script: Array<() => unknown[]>) => {
+    let calls = 0;
+    return () => script[Math.min(calls++, script.length - 1)]!();
+  };
+
+  it.each(["gpt-6-sol", "gpt-6.1-sol"])("tries the agent on the first %s tool turn", async (model) => {
+    stub = await startStubCopilot({ respond: served });
+    const { url } = await start();
+    const response = await post(url, { model, messages: [{ role: "user", content: "list" }], tools: [bashTool] });
+    expect(((await response.json()) as any).choices[0].message.tool_calls[0].function.name).toBe("bash");
+    expect(chatOf(0).threadLevelGptId).toBeDefined();
+    expect(chatOf(0).message.text).toMatch(/guide me through this from my terminal/);
+  });
+
+  it("re-sends a dead agent route agent-less in a fresh conversation, and stays agent-less", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const first = [
+      { role: "user", content: "list" },
+      { role: "assistant", content: "Sure." },
+      { role: "user", content: "now list again" },
+    ];
+    const response = await post(url, { model: "gpt-6.1-sol", messages: first, tools: [bashTool] });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as any).choices[0].message.tool_calls[0].function.name).toBe("bash");
+
+    expect(stub.connections).toHaveLength(2);
+    expect(chatOf(0).threadLevelGptId).toBeDefined();
+    expect(chatOf(1).threadLevelGptId).toBeUndefined();
+    expect(conversationOf(1)).not.toBe(conversationOf(0));
+    // The whole request, since the fresh conversation has none of it.
+    expect(chatOf(1).message.text).toContain("now list again");
+    expect(chatOf(1).message.text).toContain("Sure.");
+
+    // The next tool turn on that tone goes agent-less from the start.
+    await post(url, {
+      model: "gpt-6.1-sol",
+      messages: [{ role: "user", content: "other session" }],
+      tools: [bashTool],
+    });
+    expect(stub.connections).toHaveLength(3);
+    expect(chatOf(2).threadLevelGptId).toBeUndefined();
+  });
+
+  it("learns per tone: GPT-6 Sol still tries the agent after GPT-6.1 Sol's route died", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(chatOf(2).threadLevelGptId).toBeDefined();
+  });
+
+  it("treats an InternalError as a transient refusal once the agent has answered for the tone", async () => {
+    stub = await startStubCopilot({ respond: scripted(served, deadRoute) });
+    const { url } = await start();
+    await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    const response = await post(url, { model: "gpt-6.1-sol", messages: [{ role: "user", content: "b" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as any).error.code).toBe("m365_not_served");
+    expect(stub.connections).toHaveLength(2);
+    expect(chatOf(1).threadLevelGptId).toBeDefined();
+  });
+
+  it("does not fall back on a tone outside the learned set", async () => {
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const response = await post(url, { model: "gpt-5.5-think-deeper", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("M365_FORCE_AGENT=1 never falls back", async () => {
+    process.env.M365_FORCE_AGENT = "1";
+    stub = await startStubCopilot({ respond: scripted(deadRoute, served) });
+    const { url } = await start();
+    const response = await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(response.status).toBe(422);
+    expect(((await response.json()) as any).error.code).toBe("m365_not_served");
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("M365_FORCE_AGENT=0 never attaches the agent", async () => {
+    process.env.M365_FORCE_AGENT = "0";
+    stub = await startStubCopilot({ respond: served });
+    const { url } = await start();
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "a" }], tools: [bashTool] });
+    expect(stub.connections).toHaveLength(1);
+    expect(chatOf(0).threadLevelGptId).toBeUndefined();
+  });
+
+  it("does not attach the agent to a Sol turn without tools", async () => {
+    stub = await startStubCopilot({ respond: () => [botMessage("hi"), completion()] });
+    const { url } = await start();
+    await post(url, { model: "gpt-6-sol", messages: [{ role: "user", content: "hi" }] });
+    expect(chatOf(0).threadLevelGptId).toBeUndefined();
+  });
 });
 
 describe("failures the client has to be able to tell apart", () => {
@@ -913,6 +1089,53 @@ describe("failures the client has to be able to tell apart", () => {
     const body: any = await response.json();
     expect(body.error.code).toBe("m365_not_served");
     expect(body.error.message).toMatch(/Premium license/);
+  });
+
+  it("reports a paid model on a non-premium seat as needing a premium licence", async () => {
+    stub = await startStubCopilot({
+      respond: () => [
+        {
+          type: 2,
+          item: {
+            messages: [{ author: "bot", text: "It looks like you don't have a valid licence.", contentOrigin: "BotConnection" }],
+            result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "It looks like you don't have a valid licence." },
+          },
+        },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const response = await post(url, { model: "claude-opus", messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(422);
+    const body: any = await response.json();
+    expect(body.error.code).toBe("m365_not_served");
+    expect(body.error.param).toBe("premium_licence_required");
+    expect(body.error.message).toMatch(/premium Microsoft 365 Copilot licen[cs]e/i);
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("reports an exhausted priority-access allowance once, without continue retries", async () => {
+    // The refusal only rides in the final item, so a stream reader would see an empty
+    // turn and nudge it with "continue" — each nudge another refused turn.
+    stub = await startStubCopilot({
+      respond: () => [
+        { type: 2, item: { messages: [], result: { value: "OutOfCredits", message: OPUS_DAILY, creditScenario: "TotalTurn" } } },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const text = await (
+      await post(url, { model: "claude-opus", stream: true, messages: [{ role: "user", content: "hi" }], tools: [bashTool] })
+    ).text();
+    const line = text.split("\n").find((l) => l.startsWith("data: {") && l.includes('"error"'));
+    const body = JSON.parse(line!.slice("data: ".length));
+    expect(body.error.code).toBe("m365_not_served");
+    expect(body.error.param).toBe("priority_access_exhausted");
+    expect(body.error.message).toMatch(/allowance .*used up/i);
+    expect(body.error.message).toMatch(/midnight UTC/);
+    expect(body.error.message).toMatch(/Opus model for today/);
+    const chats = stub.connections.flatMap((c) => c.frames.filter((f) => f.type === 4));
+    expect(chats).toHaveLength(1);
   });
 
   it("reports Disengaged distinctly rather than as a generic error", async () => {

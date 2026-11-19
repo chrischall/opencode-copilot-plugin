@@ -26,7 +26,27 @@ export interface ModelInfo {
    * `WorkSearch`). Off for coding/web models; on for the `work*` models.
    */
   grounded?: boolean;
+  /**
+   * `paid`: the turn goes out on M365's paid scenario (`OfficeWebPaidCopilot`), the
+   * only one that serves this model. Absent means the included scenario. A seat
+   * without a premium Copilot licence is refused on the paid scenario.
+   */
+  scenario?: "paid";
+  /** M365 charges each turn to the user's Copilot credits. */
+  credits?: boolean;
+  /** Each turn spends a small priority-access allowance that resets at midnight UTC. */
+  metered?: boolean;
   limit: { context: number; output: number };
+}
+
+/** What sets a model apart beyond its tone; every flag defaults to off. */
+interface ModelOptions {
+  grounded?: boolean;
+  scenario?: "paid";
+  credits?: boolean;
+  metered?: boolean;
+  /** Serves only on a premium account, though on the included scenario (Opus 4.8). */
+  premium?: boolean;
 }
 
 /**
@@ -66,14 +86,22 @@ export const MODELS: readonly ModelInfo[] = [
   // Mailbox-grounded models: select these in opencode (as `m365/work` /
   // `m365/work-think`) to ask about your own mail, calendar and files — Copilot
   // searches them server-side. The other models stay coding/web-only.
-  m("work", "Ask your mail, Teams & files", "magic", false, true),
-  m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
+  m("work", "Ask your mail, Teams & files", "magic", false, { grounded: true }),
+  m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, { grounded: true }),
   // GPT-6 Sol: reasoning models on the included scenario, so every account can reach
-  // them. They take the tool agent only on a premium account, so tool turns go
-  // agent-less (see `toolRouteFor`). Tool use not yet measured here.
+  // them. GPT-6 and 6.1 Sol take the tool agent only on a premium account, which is
+  // learned by trying; GPT-6.2 Sol goes agent-less (see `toolRouteFor`). Tool use not
+  // yet measured here.
   m("gpt-6.2-sol", "GPT-6.2 Sol", "Gpt_62_Sol_Reasoning", true),
+  // GPT-6.2 Astra: the included scenario, like GPT-6.2 Sol, but every turn is charged
+  // to the user's Copilot credits.
+  m("gpt-6.2-astra", "GPT-6.2 Astra", "Gpt_62_Astra_Reasoning", true, { credits: true }),
   m("gpt-6.1-sol", "GPT-6.1 Sol", "Gpt_61_Sol_Reasoning", true),
   m("gpt-6-sol", "GPT-6 Sol", "Gpt_6_Sol_Reasoning", true),
+  // GPT-6 and GPT-6 Astra serve only on the paid scenario: the included one answers
+  // with M365's canned apology. Astra is also billed to Copilot credits.
+  m("gpt-6-astra", "GPT-6 Astra", "Gpt_6_Astra_Reasoning", true, { scenario: "paid", credits: true }),
+  m("gpt-6-think-deeper", "GPT-6 (Think Deeper)", "Gpt_6_Reasoning", true, { scenario: "paid" }),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
@@ -82,8 +110,19 @@ export const MODELS: readonly ModelInfo[] = [
   // project measured 7/30, and our one run made none. Listed after the default and
   // labelled, rather than dropped, because it is fine for plain chat.
   m("gpt-5.6-quick", "GPT-5.6 (Quick, unreliable tool calls)", "Gpt_5_6_Chat", false),
-  m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
+  // Claude. A tone is not always one model: M365 picks the version by scenario.
+  // `Claude_Opus` is Opus 5.5 on the paid scenario (metered by a priority-access
+  // allowance) and Opus 4.8 on the included one (premium accounts only, unmetered).
+  // `Claude_Sonnet` is Sonnet 4.6 on the included scenario and Sonnet 5.5 on the paid
+  // one (metered). `Claude_Sonnet_5` is Sonnet 5 on the paid scenario.
+  m("claude-opus", "Claude Opus 5.5", "Claude_Opus", false, { scenario: "paid", metered: true }),
+  m("claude-opus-4.8", "Claude Opus 4.8", "Claude_Opus", false, { premium: true }),
+  m("claude-sonnet-5.5", "Claude Sonnet 5.5", "Claude_Sonnet", false, { scenario: "paid", metered: true }),
+  m("claude-sonnet-5", "Claude Sonnet 5", "Claude_Sonnet_5", false, { scenario: "paid" }),
+  m("claude-sonnet", "Claude Sonnet 4.6", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),
+  // Claude Fable 5.1: the included scenario, billed to Copilot credits.
+  m("claude-fable", "Claude Fable 5.1", "Claude_Fable", false, { credits: true }),
   m("gpt-5.4-think-deeper", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
   m("gpt-5.4-quick", "GPT-5.4 (Quick)", "Gpt_5_4_Chat", false),
   m("gpt-5.3-quick", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
@@ -93,15 +132,28 @@ export const MODELS: readonly ModelInfo[] = [
   m(LOCAL_TITLE_MODEL, "Local titler (no M365 call)", null, false),
 ];
 
-function m(id: string, name: string, tone: string | null, reasoning: boolean, grounded = false): ModelInfo {
+function m(id: string, name: string, tone: string | null, reasoning: boolean, options: ModelOptions = {}): ModelInfo {
+  const { grounded = false, scenario, credits, metered, premium } = options;
   return {
     id,
-    name: pickerName(name, tone, grounded),
+    name: pickerName(withLabels(name, { premium: premium || scenario === "paid", credits }), tone, grounded),
     tone,
     reasoning,
     grounded,
+    ...(scenario ? { scenario } : {}),
+    ...(credits ? { credits } : {}),
+    ...(metered ? { metered } : {}),
     limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS },
   };
+}
+
+/**
+ * Say in the name what a user should know before picking: that the model needs a
+ * premium Copilot licence (so a refusal is no surprise), and that it spends credits.
+ */
+function withLabels(name: string, labels: { premium?: boolean; credits?: boolean }): string {
+  const tags = [labels.premium ? "Premium" : null, labels.credits ? "uses Copilot credits" : null].filter(Boolean);
+  return tags.length ? `${name} (${tags.join(", ")})` : name;
 }
 
 /**
@@ -138,6 +190,13 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = {
   // `think-deeper` is the generic id for GPT-5.5's reasoning tone; the descriptive id
   // is the one the README measures.
   "think-deeper": "gpt-5.5-think-deeper",
+  // The Claude models by version, as the reference project accepts them.
+  "claude-sonnet-4.6": "claude-sonnet",
+  "claude-sonnet-4.5": "claude-sonnet",
+  "claude-opus-5.5": "claude-opus",
+  "claude-opus-5": "claude-opus",
+  "claude-opus-4.5": "claude-opus-4.8",
+  "claude-fable-5.1": "claude-fable",
 };
 
 /** The canonical id for an alias, or the id unchanged. */
@@ -196,31 +255,98 @@ export interface ToolRoute {
 }
 
 /**
- * - Reasoning GPT tones keep the agent (agent-less GPT-5.x made no tool calls in the
- *   reference project, 0/4), but under the default framing they say they cannot reach
- *   the workspace, even after a command succeeded. The reference project's `relay`
- *   framing, where the user asks to be guided through their own terminal, took that to
- *   30/30. Ours said it on the first reply in 8 of 8 runs.
- * - Chat GPT tones work as they are.
- * - Claude stays as it was: with the agent, which M365 answers on GPT. The reference
- *   project ran Claude without the agent and with `relay` (193/200), but without the
- *   agent an account with no Claude licence refuses every tool turn
- *   (`ClaudeUnavailableForLicense`), where today it quietly gets GPT. Unmeasured on a
- *   licensed account, so not adopted.
- */
-/**
- * GPT-6 Sol tones. With the declarative agent attached they serve only on a premium
- * account; on any other account that is a dead route (`InternalError`, no content).
- * Nothing on the token says which kind of account it is, so they always go agent-less.
- * Agent-less, Sol runs commands in a remote bash sandbox of its own, so the relay note
- * names it and asks for the user's terminal instead. From the reference project's
- * protocol notes (`m365-copilot-api.md`, the Sol rows and quirk #21).
+ * How each tone is asked to call tools. These routes come from the reference
+ * project's measurements (`m365-copilot-api.md` and `AGENTLESS_TOOL_TONES`,
+ * `AGENT_CLAUDE_TONES` in its `copilot.ts`), not from live runs of this plugin.
+ *
+ * - Chat GPT tones work as they are: the agent, the default framing.
+ * - Reasoning GPT-5.x tones keep the agent (agent-less GPT-5.x made no tool calls in
+ *   the reference project, 0/4), but under the default framing they say they cannot
+ *   reach the workspace, even after a command succeeded. The `relay` framing, where
+ *   the user asks to be guided through their own terminal, took that to 30/30.
+ * - Claude goes agent-less, as a relay. On a non-premium account the agent route does
+ *   not serve Claude Sonnet at all (BotConnection apology, `InternalError`), and
+ *   agent-less Claude tool-calls reliably. `Claude_Opus` is the exception: both Opus
+ *   models take the agent, and Opus 4.8 without it works in its own code interpreter.
+ * - GPT-6 (`Gpt_6_Reasoning`) is the same dead route with the agent on every account,
+ *   premium or not; agent-less it answers. The Astra tones go agent-less too.
+ * - Sol tones run commands in a remote bash sandbox of their own when agent-less, so
+ *   the relay note names it and asks for the user's terminal instead (the Sol rows and
+ *   quirk #21). GPT-6 Sol and GPT-6.1 Sol serve with the agent only on a premium
+ *   account, so whether they get it is learned (`PREMIUM_ONLY_AGENT_TONES`). GPT-6.2
+ *   Sol always goes agent-less, and GPT-6.2 Astra is routed like it.
  */
 const SOL_TONE = /^Gpt_\d+_Sol_Reasoning$/;
 const SOL_SANDBOX = "the bash sandbox with /mnt/data and /home/oai";
+const SANDBOXED_TONES: ReadonlySet<string> = new Set(["Gpt_62_Astra_Reasoning"]);
+const AGENTLESS_TONES: ReadonlySet<string> = new Set(["Gpt_6_Reasoning", "Gpt_6_Astra_Reasoning"]);
+const AGENT_CLAUDE_TONES: ReadonlySet<string> = new Set(["Claude_Opus"]);
 
-export function toolRouteFor(tone: string | null): ToolRoute {
-  if (tone && SOL_TONE.test(tone)) return { framing: "relay", agent: false, sandbox: SOL_SANDBOX };
+/**
+ * Tones whose agent route serves only on a premium account (the reference project's
+ * `PREMIUM_ONLY_AGENT_TONES`, agent-tone-probe 2026-10-02 and 2026-10-06). On a
+ * non-premium account the agent-attached turn is a dead route: a BotConnection
+ * apology in the final item, `result: InternalError`, no content. Agent-less, the same
+ * tone serves on either account.
+ *
+ * Nothing on the token says which kind of account it is, so the proxy finds out by
+ * trying: the first tool turn carries the agent, and a dead route marks the tone
+ * agent-dead (`AgentRouteMemory`) and is re-sent agent-less. A premium account
+ * produces the same wire state as a rare one-off (about 1 in 250 agent turns), so once
+ * the agent has answered for a tone, an `InternalError` is just a refusal.
+ *
+ * `M365_FORCE_AGENT` overrides this for these tones only: `0` never attaches the
+ * agent, `1` always does and never falls back.
+ */
+export const PREMIUM_ONLY_AGENT_TONES: ReadonlySet<string> = new Set(["Gpt_6_Sol_Reasoning", "Gpt_61_Sol_Reasoning"]);
+
+/**
+ * What one proxy has learned about the agent route, per tone. A proxy serves one
+ * account, so this is per-account knowledge; a restart learns it again.
+ */
+export class AgentRouteMemory {
+  private readonly dead = new Set<string>();
+  private readonly alive = new Set<string>();
+
+  /**
+   * Record that this account's agent route does not serve `tone`. Returns false, and
+   * records nothing, when the agent has already answered for it: then the failure
+   * was a one-off.
+   */
+  noteDead(tone: string): boolean {
+    if (this.alive.has(tone)) return false;
+    this.dead.add(tone);
+    return true;
+  }
+
+  /** Record that the agent answered for `tone` on this account. */
+  noteAlive(tone: string): void {
+    this.alive.add(tone);
+  }
+
+  isAlive(tone: string): boolean {
+    return this.alive.has(tone);
+  }
+
+  isDead(tone: string): boolean {
+    return this.dead.has(tone);
+  }
+}
+
+/** `M365_FORCE_AGENT`: `true` for `1`, `false` for `0`, otherwise undecided. */
+export function forcedAgent(): boolean | undefined {
+  const force = process.env.M365_FORCE_AGENT;
+  return force === "1" ? true : force === "0" ? false : undefined;
+}
+
+export function toolRouteFor(tone: string | null, memory?: AgentRouteMemory): ToolRoute {
+  if (tone && PREMIUM_ONLY_AGENT_TONES.has(tone)) {
+    const agent = forcedAgent() ?? !memory?.isDead(tone);
+    return { framing: "relay", agent, sandbox: SOL_SANDBOX };
+  }
+  if (tone && (SOL_TONE.test(tone) || SANDBOXED_TONES.has(tone))) return { framing: "relay", agent: false, sandbox: SOL_SANDBOX };
+  if (tone && AGENTLESS_TONES.has(tone)) return { framing: "relay", agent: false };
+  if (tone?.startsWith("Claude_")) return { framing: "relay", agent: AGENT_CLAUDE_TONES.has(tone) };
   if (tone?.startsWith("Gpt_") && tone.endsWith("_Reasoning")) return { framing: "relay", agent: true };
   return { framing: "default", agent: true };
 }

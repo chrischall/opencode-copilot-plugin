@@ -130,9 +130,64 @@ export class M365ThrottledError extends Error {
  * this account's licence does not cover, or a tone that is registered but dead.
  */
 export class M365UnavailableError extends Error {
-  constructor(detail: string) {
+  /** Why, when M365 said so in a way the client can act on. */
+  readonly reason?: string;
+  constructor(detail: string, reason?: string) {
     super(`M365 could not serve this model: ${detail}`);
     this.name = "M365UnavailableError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * The paid scenario on a seat without a premium Copilot licence: the final item carries
+ * `result.value: "ForbiddenRequest"` and `errorCode: "InvalidCopilotLicense"`, and
+ * BotConnection explains in words. It is about the account, not the model.
+ */
+export class PremiumLicenceRequiredError extends M365UnavailableError {
+  constructor(said: string) {
+    super(
+      `it needs a premium Microsoft 365 Copilot licence, which this account does not have (InvalidCopilotLicense). Choose a model on the included scenario.${said ? ` M365 said: ${said}` : ""}`,
+      "premium_licence_required",
+    );
+    this.name = "PremiumLicenceRequiredError";
+  }
+}
+
+/**
+ * `result: InternalError` with no content in the update frames, only (at most) an
+ * apology in the final item. It is how a dead agent route looks on a tone whose agent
+ * serves only on a premium account, so the server can tell it apart and re-send the
+ * turn agent-less (`PREMIUM_ONLY_AGENT_TONES` in models.ts). Anywhere else it is an
+ * ordinary refusal.
+ */
+export class EmptyInternalError extends M365UnavailableError {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "EmptyInternalError";
+  }
+}
+
+/** Which priority-access allowance ran out. */
+export type AllowanceWindow = "day" | "week";
+
+/**
+ * A metered model's priority-access allowance is used up: `result.value:
+ * "OutOfCredits"`, the refusal text in `result.message`. The refusal is not streamed,
+ * so a reader of the updates alone would see an empty turn. Both allowances reset at
+ * midnight UTC, the weekly one on Monday (reference project, docs §5 / quirk #26).
+ */
+export class PriorityAccessExhaustedError extends M365UnavailableError {
+  readonly window: AllowanceWindow;
+  constructor(said: string) {
+    const window: AllowanceWindow = /\bweek|monday/i.test(said) ? "week" : "day";
+    const resets = window === "week" ? "midnight UTC on Monday" : "midnight UTC";
+    super(
+      `this model's ${window === "week" ? "weekly" : "daily"} priority-access allowance is used up; it resets at ${resets}. Choose another model until then.${said ? ` M365 said: ${said}` : ""}`,
+      "priority_access_exhausted",
+    );
+    this.name = "PriorityAccessExhaustedError";
+    this.window = window;
   }
 }
 
@@ -178,6 +233,13 @@ export interface TurnOptions {
    * coding turn must not reach into the mailbox.
    */
   grounded?: boolean;
+  /**
+   * Send the turn on M365's paid scenario (`OfficeWebPaidCopilot`, with the
+   * `Premium` licence type it travels with), the only scenario that serves some
+   * models. An entitlement, not a bypass: a seat without a premium Copilot licence
+   * is refused there. Ignored on a grounded turn, which has its own scenario.
+   */
+  paid?: boolean;
   signal?: AbortSignal;
   onDelta?: (chunk: string) => void;
   /**
@@ -243,7 +305,7 @@ export class CopilotSession {
 
     const token = await this.options.getToken();
     const { oid, tid } = decodeJwt(token);
-    const url = this.buildUrl(token, oid, tid, turn.grounded ?? false);
+    const url = this.buildUrl(token, oid, tid, turn.grounded ?? false, turn.paid ?? false);
 
     const { annotations, note } = await this.uploadImages(token, turn);
     const message: OutgoingMessage = { text: note ? `${text}\n\n${note}` : text, annotations };
@@ -300,14 +362,24 @@ export class CopilotSession {
     return { annotations, note };
   }
 
-  private buildUrl(token: string, oid: string, tid: string, grounded: boolean): string {
+  private buildUrl(token: string, oid: string, tid: string, grounded: boolean, paid: boolean): string {
     const origin = this.options.endpoint ?? DEFAULT_ENDPOINT;
     // The full-screen chat scenario does not ground on the mailbox; the Outlook
     // side-pane scenario does. Verified live 2026-11-09 — the side-pane params
     // are what returned real inbox results.
     const scenarioParams: Record<string, string> = grounded
       ? { source: '"owahub"', product: "OwaHub", agentHost: "Bizchat.Sidepane", scenario: "OutlookSidepaneWorkCopilot", agent: "work" }
-      : { source: '"officeweb"', product: "Office", agentHost: "Bizchat.FullScreen", scenario: "OfficeWebIncludedCopilot" };
+      : {
+          source: '"officeweb"',
+          product: "Office",
+          agentHost: "Bizchat.FullScreen",
+          // The paid scenario is what unlocks Opus 5.5, Sonnet 5/5.5 and GPT-6; the
+          // reference project sends `licenseType=Premium` with it, as the web client
+          // does. The included scenario has never sent a licence type here.
+          ...(paid
+            ? { scenario: "OfficeWebPaidCopilot", licenseType: "Premium" }
+            : { scenario: "OfficeWebIncludedCopilot" }),
+        };
     const params = new URLSearchParams({
       access_token: token,
       ConversationId: this.conversationId,
@@ -325,6 +397,9 @@ export class CopilotSession {
     return new Promise<TurnResult>((resolve, reject) => {
       let deltaText = "";
       let snapshotText = "";
+      // Any answer text in the update frames. The final item's own text does not count:
+      // a dead route carries its apology there and nowhere else.
+      let streamedContent = false;
       let handshakeDone = false;
       let settled = false;
       const result: TurnResult = { text: "" };
@@ -342,7 +417,7 @@ export class CopilotSession {
         // Only a grounded turn carries citation tokens; a coding answer is passed
         // through verbatim so its indentation and tool-call fences are never touched.
         const raw = deltaText.length >= snapshotText.length ? deltaText : snapshotText;
-        const refusal = refusalOf(result, raw);
+        const refusal = refusalOf(result, raw, streamedContent);
         if (refusal) {
           reject(refusal);
           return;
@@ -396,6 +471,7 @@ export class CopilotSession {
                     return;
                   }
                   deltaText += applied.delta;
+                  if (applied.delta || applied.snapshot) streamedContent = true;
                   if (applied.snapshot.length > snapshotText.length) snapshotText = applied.snapshot;
                 }
               }
@@ -583,9 +659,12 @@ interface OutgoingMessage {
  * M365's own refusal, when that is what arrived instead of an answer. Its text reads
  * like a reply, so returned as one it would end opencode's loop on an apology.
  */
-function refusalOf(result: TurnResult, text: string): Error | undefined {
+function refusalOf(result: TurnResult, text: string, streamedContent: boolean): Error | undefined {
   const detail = [result.errorCode, text.trim()].filter(Boolean).join(": ") || result.resultValue || "no reason given";
   if (result.resultValue === "Throttled") return new M365ThrottledError(detail);
+  if (result.resultValue === "OutOfCredits") return new PriorityAccessExhaustedError(text.trim());
+  if (result.errorCode === "InvalidCopilotLicense") return new PremiumLicenceRequiredError(text.trim());
+  if (result.resultValue === "InternalError" && !streamedContent) return new EmptyInternalError(detail);
   if (result.resultValue && result.resultValue !== "Success") return new M365UnavailableError(detail);
   // A tone that is registered but dead answers with a canned apology from here.
   if (result.contentOrigin === "BotConnection") return new M365UnavailableError(`registered but dead (BotConnection): ${detail}`);

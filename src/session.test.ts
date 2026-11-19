@@ -9,7 +9,17 @@ import {
   throttling,
   type StubServer,
 } from "../test/stub-copilot.js";
-import { CopilotSession, DisengagedError, M365ThrottledError, M365UnavailableError, decodeJwt, cleanAnswer } from "./session.js";
+import {
+  CopilotSession,
+  DisengagedError,
+  EmptyInternalError,
+  M365ThrottledError,
+  M365UnavailableError,
+  PremiumLicenceRequiredError,
+  PriorityAccessExhaustedError,
+  decodeJwt,
+  cleanAnswer,
+} from "./session.js";
 
 /** A token carrying just the claims we read: object id and tenant id. */
 function fakeToken(oid = "aaaa-oid", tid = "bbbb-tid"): string {
@@ -189,6 +199,29 @@ describe("mailbox grounding", () => {
     stub = await startStubCopilot();
     await sessionFor(stub).run("hi");
     expect(new URL(stub.last().url, "http://x").searchParams.get("scenario")).toBe("OfficeWebIncludedCopilot");
+  });
+
+  it("sends no licence type on the included scenario, as before", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("hi");
+    expect(new URL(stub.last().url, "http://x").searchParams.get("licenseType")).toBeNull();
+  });
+
+  it("switches to the paid scenario with the Premium licence type for a paid model", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("hi", { tone: "Claude_Opus", paid: true });
+    const url = new URL(stub.last().url, "http://x");
+    expect(url.searchParams.get("scenario")).toBe("OfficeWebPaidCopilot");
+    expect(url.searchParams.get("licenseType")).toBe("Premium");
+    expect(url.searchParams.get("agentHost")).toBe("Bizchat.FullScreen");
+  });
+
+  it("keeps a grounded turn on the side-pane scenario even when marked paid", async () => {
+    stub = await startStubCopilot();
+    await sessionFor(stub).run("inbox?", { grounded: true, paid: true });
+    const url = new URL(stub.last().url, "http://x");
+    expect(url.searchParams.get("scenario")).toBe("OutlookSidepaneWorkCopilot");
+    expect(url.searchParams.get("licenseType")).toBeNull();
   });
 
   it("attaches the built-in WorkSearch agent that grounds on the mailbox", async () => {
@@ -395,6 +428,78 @@ describe("failure modes", () => {
     const failure = sessionFor(stub).run("hi");
     await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
     await expect(failure).rejects.toThrow(/Premium license/);
+  });
+
+  it("marks an InternalError with nothing in the update frames, which is how a dead agent route looks", async () => {
+    stub = await startStubCopilot({ respond: () => [verdict("InternalError", "Sorry, something went wrong."), completion()] });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(EmptyInternalError);
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+  });
+
+  it("does not mark an InternalError that came after streamed content", async () => {
+    stub = await startStubCopilot({
+      respond: () => [delta("Partial answer"), verdict("InternalError", "Sorry, something went wrong."), completion()],
+    });
+    const failure = sessionFor(stub).run("hi");
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+    await expect(failure).rejects.not.toBeInstanceOf(EmptyInternalError);
+  });
+
+  it("raises the paid scenario's licence refusal as a premium-licence refusal", async () => {
+    // A non-premium seat on OfficeWebPaidCopilot: the final item says ForbiddenRequest /
+    // InvalidCopilotLicense and BotConnection explains in words.
+    stub = await startStubCopilot({
+      respond: () => [
+        verdict("ForbiddenRequest", "It looks like you don't have a valid licence. To get access, please check with your administrator.", {
+          errorCode: "InvalidCopilotLicense",
+        }),
+        completion(),
+      ],
+    });
+    const failure = sessionFor(stub).run("hi", { paid: true });
+    await expect(failure).rejects.toBeInstanceOf(PremiumLicenceRequiredError);
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+    await expect(failure).rejects.toThrow(/premium Microsoft 365 Copilot licen[cs]e/i);
+    await expect(failure).rejects.toMatchObject({ reason: "premium_licence_required" });
+  });
+
+  const OPUS_DAILY =
+    "You've used your available priority access to the Opus model for today. You can choose another available model or wait until tomorrow to use the Opus model again.";
+  const OPUS_WEEKLY =
+    "You've used your available priority access to the Opus model for the week. You can choose another available model or wait until Monday to use the Opus model again.";
+
+  /** The priority-access refusal is NOT streamed: no delta, no update, only the final item. */
+  const outOfCredits = (message: string) => ({
+    type: 2,
+    item: { messages: [], result: { value: "OutOfCredits", message, creditScenario: "TotalTurn" } },
+  });
+
+  it("raises an unstreamed priority-access refusal as an exhausted allowance, not an empty answer", async () => {
+    stub = await startStubCopilot({ respond: () => [outOfCredits(OPUS_DAILY), completion()] });
+    const failure = sessionFor(stub).run("hi", { paid: true });
+    await expect(failure).rejects.toBeInstanceOf(PriorityAccessExhaustedError);
+    await expect(failure).rejects.toBeInstanceOf(M365UnavailableError);
+    await expect(failure).rejects.toThrow(/allowance .*used up/i);
+    await expect(failure).rejects.toThrow(/midnight UTC/);
+    await expect(failure).rejects.toThrow(/priority access to the Opus model for today/);
+    await expect(failure).rejects.toMatchObject({ reason: "priority_access_exhausted", window: "day" });
+  });
+
+  it("says a weekly allowance resets on Monday", async () => {
+    stub = await startStubCopilot({ respond: () => [outOfCredits(OPUS_WEEKLY), completion()] });
+    const failure = sessionFor(stub).run("hi", { paid: true });
+    await expect(failure).rejects.toMatchObject({ reason: "priority_access_exhausted", window: "week" });
+    await expect(failure).rejects.toThrow(/midnight UTC on Monday/);
+  });
+
+  it("raises OutOfCredits with no message at all as an exhausted allowance", async () => {
+    stub = await startStubCopilot({
+      respond: () => [{ type: 2, item: { messages: [], result: { value: "OutOfCredits" } } }, completion()],
+    });
+    const failure = sessionFor(stub).run("hi", { paid: true });
+    await expect(failure).rejects.toBeInstanceOf(PriorityAccessExhaustedError);
+    await expect(failure).rejects.toThrow(/midnight UTC/);
   });
 
   it("raises a registered-but-dead route's canned reply as unavailable", async () => {

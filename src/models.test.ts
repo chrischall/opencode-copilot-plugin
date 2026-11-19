@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildModelInfos } from "./config.js";
 import {
   DEFAULT_MODEL,
@@ -7,6 +7,8 @@ import {
   MODELS,
   isLocalModel,
   listModelIds,
+  AgentRouteMemory,
+  PREMIUM_ONLY_AGENT_TONES,
   resolveModel,
   toneFor,
   toolRouteFor,
@@ -144,8 +146,25 @@ describe("how each tone is asked to call tools", () => {
     expect(toolRouteFor("Gpt_5_5_Reasoning")).toEqual({ framing: "relay", agent: true });
   });
 
-  it("leaves Claude on the agent, since an unlicensed account refuses Claude without it", () => {
-    for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning"]) expect(toolRouteFor(tone)).toEqual({ framing: "default", agent: true });
+  it("sends Claude agent-less as a relay, since Sonnet's agent route is dead on a non-premium account", () => {
+    for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning", "Claude_Sonnet_5", "Claude_Fable"]) {
+      expect(toolRouteFor(tone)).toEqual({ framing: "relay", agent: false });
+    }
+  });
+
+  it("keeps the agent for Claude Opus, the one Claude tone that takes it", () => {
+    expect(toolRouteFor("Claude_Opus")).toEqual({ framing: "relay", agent: true });
+  });
+
+  it("sends GPT-6 and GPT-6 Astra agent-less, which is dead with the agent on every account", () => {
+    for (const tone of ["Gpt_6_Reasoning", "Gpt_6_Astra_Reasoning"]) {
+      expect(toolRouteFor(tone)).toEqual({ framing: "relay", agent: false });
+    }
+  });
+
+  it("routes GPT-6.2 Astra like GPT-6.2 Sol, steering it off the sandbox", () => {
+    expect(toolRouteFor("Gpt_62_Astra_Reasoning")).toEqual(toolRouteFor("Gpt_62_Sol_Reasoning"));
+    expect(toolRouteFor("Gpt_62_Astra_Reasoning").sandbox).toMatch(/\/mnt\/data/);
   });
 });
 
@@ -163,18 +182,27 @@ describe("compatibility aliases", () => {
     ["gpt-5.6", "gpt-5.6-quick"],
     // And the reasoning tone's generic id.
     ["think-deeper", "gpt-5.5-think-deeper"],
+    // The Claude models, by the versions M365 serves on each scenario.
+    ["claude-sonnet-4.6", "claude-sonnet"],
+    ["claude-sonnet-4.5", "claude-sonnet"],
+    ["claude-opus-5.5", "claude-opus"],
+    ["claude-opus-5", "claude-opus"],
+    ["claude-opus-4.5", "claude-opus-4.8"],
+    ["claude-fable-5.1", "claude-fable"],
   ];
 
   it("advertises one coding model per tone", () => {
     const coding = MODELS.filter((model) => model.tone && !model.grounded);
     // Keyed on the scenario too: one tone on the paid scenario can be another model.
-    const tones = coding.map((model) => `${model.tone}|${(model as { scenario?: string }).scenario ?? "included"}`);
+    const tones = coding.map((model) => `${model.tone}|${model.scenario ?? "included"}`);
     expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
   });
 
-  it("advertises one chat model per chat tone", () => {
+  it("advertises one chat model per chat tone and scenario", () => {
+    // `Claude_Opus` is two models, Opus 5.5 on the paid scenario and Opus 4.8 on the
+    // included one, so the pair is what has to be unique.
     const chat = MODELS.filter((model) => model.tone && !model.reasoning && !model.grounded);
-    const tones = chat.map((model) => model.tone);
+    const tones = chat.map((model) => `${model.tone}/${model.scenario ?? "included"}`);
     expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
   });
 
@@ -244,9 +272,8 @@ describe("GPT-6 Sol models", () => {
     expect(resolveModel(`m365/${id}`).id).toBe(id);
   });
 
-  it.each(sol)("%s goes agent-less on tool turns, as a relay that steers it off its own sandbox", (_id, tone) => {
+  it.each(sol)("%s is framed as a relay that steers it off its own sandbox", (_id, tone) => {
     const route = toolRouteFor(tone);
-    expect(route.agent).toBe(false);
     expect(route.framing).toBe("relay");
     expect(route.sandbox).toMatch(/\/mnt\/data/);
   });
@@ -257,5 +284,165 @@ describe("GPT-6 Sol models", () => {
 
   it("leaves the default model alone", () => {
     expect(DEFAULT_MODEL).toBe("quick");
+  });
+});
+
+describe("the models the reference project maps", () => {
+  // From the reference project's protocol notes (`m365-copilot-api.md` §5) and its
+  // `MODEL_TONES`, `PAID_SCENARIO_TONES`, `PAID_SCENARIO_MODELS` and
+  // `INCLUDED_SCENARIO_MODELS`.
+  const table: Array<{
+    id: string;
+    tone: string;
+    reasoning: boolean;
+    scenario?: "paid";
+    credits?: boolean;
+    metered?: boolean;
+    name: string;
+  }> = [
+    { id: "gpt-6-think-deeper", tone: "Gpt_6_Reasoning", reasoning: true, scenario: "paid", name: "GPT-6 (Think Deeper)" },
+    { id: "gpt-6-astra", tone: "Gpt_6_Astra_Reasoning", reasoning: true, scenario: "paid", credits: true, name: "GPT-6 Astra" },
+    { id: "gpt-6.2-astra", tone: "Gpt_62_Astra_Reasoning", reasoning: true, credits: true, name: "GPT-6.2 Astra" },
+    { id: "claude-opus", tone: "Claude_Opus", reasoning: false, scenario: "paid", metered: true, name: "Claude Opus 5.5" },
+    { id: "claude-opus-4.8", tone: "Claude_Opus", reasoning: false, name: "Claude Opus 4.8" },
+    { id: "claude-sonnet-5.5", tone: "Claude_Sonnet", reasoning: false, scenario: "paid", metered: true, name: "Claude Sonnet 5.5" },
+    { id: "claude-sonnet-5", tone: "Claude_Sonnet_5", reasoning: false, scenario: "paid", name: "Claude Sonnet 5" },
+    { id: "claude-fable", tone: "Claude_Fable", reasoning: false, credits: true, name: "Claude Fable 5.1" },
+  ];
+
+  it.each(table)("$id selects $tone", (row) => {
+    const model = resolveModel(row.id);
+    expect(model.id).toBe(row.id);
+    expect(model.tone).toBe(row.tone);
+    expect(model.reasoning).toBe(row.reasoning);
+    expect(model.grounded).toBeFalsy();
+    expect(resolveModel(`m365/${row.id}`).id).toBe(row.id);
+  });
+
+  it.each(table)("$id is on the $scenario scenario, with its credits and metering", (row) => {
+    const model = resolveModel(row.id);
+    expect(model.scenario).toBe(row.scenario);
+    expect(Boolean(model.credits)).toBe(Boolean(row.credits));
+    expect(Boolean(model.metered)).toBe(Boolean(row.metered));
+  });
+
+  it.each(table)("$id says what it is in the picker", (row) => {
+    expect(resolveModel(row.id).name).toMatch(new RegExp(`^Code · ${row.name.replace(/[().]/g, "\\$&")}`));
+  });
+
+  it("marks every credit-billed model in its name, and no other", () => {
+    for (const model of MODELS) {
+      if (model.credits) expect(model.name, model.id).toMatch(/uses Copilot credits/);
+      else expect(model.name, model.id).not.toMatch(/credits/);
+    }
+  });
+
+  it("marks every paid-scenario model Premium, so a refusal is no surprise", () => {
+    for (const model of MODELS.filter((candidate) => candidate.scenario === "paid")) {
+      expect(model.name, model.id).toMatch(/Premium/);
+    }
+  });
+
+  it("marks Opus 4.8 Premium too: it serves only on a premium account", () => {
+    expect(resolveModel("claude-opus-4.8").scenario).toBeUndefined();
+    expect(resolveModel("claude-opus-4.8").name).toMatch(/Premium/);
+  });
+
+  it("names the included Sonnet by its version", () => {
+    expect(resolveModel("claude-sonnet").name).toContain("Claude Sonnet 4.6");
+    expect(resolveModel("claude-sonnet").scenario).toBeUndefined();
+  });
+
+  it("leaves every model that was already listed on the included scenario, unmetered and free", () => {
+    for (const id of ["quick", "work", "work-think", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.2-sol", "claude-sonnet", "claude-sonnet-think-deeper"]) {
+      const model = resolveModel(id);
+      expect(model.scenario, id).toBeUndefined();
+      expect(model.credits, id).toBeFalsy();
+      expect(model.metered, id).toBeFalsy();
+    }
+  });
+
+  it("lists Opus 5.5 and Opus 4.8 as two models, though they share a tone", () => {
+    const ids = listModelIds();
+    expect(ids).toContain("claude-opus");
+    expect(ids).toContain("claude-opus-4.8");
+  });
+
+  it("keeps the default model", () => {
+    expect(DEFAULT_MODEL).toBe("quick");
+  });
+
+  it("puts every new model in opencode's catalogue, with tools on", () => {
+    const infos = buildModelInfos();
+    for (const row of table) {
+      const info = infos.find((candidate) => candidate.id === row.id);
+      expect(info, row.id).toBeDefined();
+      expect(info!.capabilities.tools).toBe(true);
+      expect(info!.name).toBe(resolveModel(row.id).name);
+    }
+  });
+});
+
+describe("the learned agent route for GPT-6 Sol and GPT-6.1 Sol", () => {
+  // The reference project's PREMIUM_ONLY_AGENT_TONES: the agent serves these tones only
+  // on a premium account, and nothing on the token says which kind of account it is.
+  afterEach(() => {
+    delete process.env.M365_FORCE_AGENT;
+  });
+
+  const learned = ["Gpt_6_Sol_Reasoning", "Gpt_61_Sol_Reasoning"];
+
+  it("covers exactly Sol 6 and 6.1", () => {
+    expect([...PREMIUM_ONLY_AGENT_TONES].sort()).toEqual([...learned].sort());
+  });
+
+  it.each(learned)("tries the agent first on %s", (tone) => {
+    const memory = new AgentRouteMemory();
+    expect(toolRouteFor(tone, memory).agent).toBe(true);
+    expect(toolRouteFor(tone).agent).toBe(true);
+  });
+
+  it.each(learned)("goes agent-less on %s once the route proved dead, and only for that tone", (tone) => {
+    const memory = new AgentRouteMemory();
+    expect(memory.noteDead(tone)).toBe(true);
+    expect(toolRouteFor(tone, memory)).toEqual({ framing: "relay", agent: false, sandbox: toolRouteFor(tone).sandbox });
+    const other = learned.find((candidate) => candidate !== tone)!;
+    expect(toolRouteFor(other, memory).agent).toBe(true);
+    expect(toolRouteFor(tone, new AgentRouteMemory()).agent).toBe(true);
+  });
+
+  it("will not mark a route dead once the agent has answered for that tone", () => {
+    const memory = new AgentRouteMemory();
+    memory.noteAlive("Gpt_6_Sol_Reasoning");
+    expect(memory.isAlive("Gpt_6_Sol_Reasoning")).toBe(true);
+    expect(memory.noteDead("Gpt_6_Sol_Reasoning")).toBe(false);
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(true);
+    expect(memory.noteDead("Gpt_61_Sol_Reasoning")).toBe(true);
+  });
+
+  it("M365_FORCE_AGENT=0 never attaches the agent, =1 attaches it even after a dead route", () => {
+    const memory = new AgentRouteMemory();
+    process.env.M365_FORCE_AGENT = "0";
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(false);
+    memory.noteDead("Gpt_6_Sol_Reasoning");
+    process.env.M365_FORCE_AGENT = "1";
+    expect(toolRouteFor("Gpt_6_Sol_Reasoning", memory).agent).toBe(true);
+  });
+
+  it("keeps GPT-6.2 Sol and the Astra tones agent-less whatever is learned or forced", () => {
+    for (const force of [undefined, "0", "1"]) {
+      if (force === undefined) delete process.env.M365_FORCE_AGENT;
+      else process.env.M365_FORCE_AGENT = force;
+      for (const tone of ["Gpt_62_Sol_Reasoning", "Gpt_62_Astra_Reasoning", "Gpt_6_Astra_Reasoning"]) {
+        expect(toolRouteFor(tone, new AgentRouteMemory()).agent).toBe(false);
+      }
+    }
+  });
+
+  it("leaves every other tone to its fixed route, whatever M365_FORCE_AGENT says", () => {
+    process.env.M365_FORCE_AGENT = "0";
+    expect(toolRouteFor("Gpt_5_5_Chat").agent).toBe(true);
+    process.env.M365_FORCE_AGENT = "1";
+    expect(toolRouteFor("Claude_Sonnet").agent).toBe(false);
   });
 });

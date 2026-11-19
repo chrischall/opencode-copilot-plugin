@@ -322,7 +322,7 @@ licence refusal was retried ten times. The error `code` says which refusal it wa
 | Code | Meaning |
 |---|---|
 | `m365_throttled` | The account is throttled. Wait for a lull. |
-| `m365_not_served` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone. Called `m365_unavailable` up to 2.2.0 |
+| `m365_not_served` | M365 answered with its own refusal: no credits, a model this licence does not cover, or a dead tone. The `param` is `premium_licence_required` or `priority_access_exhausted` when it is one of [those two](#premium-models-and-the-paid-scenario). Called `m365_unavailable` up to 2.2.0 |
 | `m365_turn_rejected` | The server refused the request outright, typically a retired tone |
 | `m365_disengaged` | M365's filter refused to engage with the prompt. A disengaged conversation stays that way, so the proxy drops it: the next request opens a fresh conversation and replays the whole history |
 
@@ -348,14 +348,68 @@ on the real model — they are real work, and only titling opens the extra conve
 
 Models are selected by an M365 *tone*, not a model id. `m365/quick` is the default.
 
+### Every model
+
+What each model costs is in [What it costs](#what-it-costs); the column here only
+flags the exceptions. "Premium" in a picker name means the model needs a premium
+Microsoft 365 Copilot licence, and "uses Copilot credits" means every turn is charged to
+them. The routing column says how a tool turn is put to M365 (see
+[Tool turns per model](#tool-turns-per-model)).
+
+| Model | Scenario | Cost ([details](#what-it-costs)) | Tool turns |
+|---|---|---|---|
+| `work` | Outlook side pane, grounded | included | none: Copilot's own `WorkSearch` agent |
+| `work-think` | Outlook side pane, grounded | included | none: Copilot's own `WorkSearch` agent |
+| `gpt-6.2-sol` | included | included | agent-less, relay, sandbox note |
+| `gpt-6.2-astra` | included | Copilot credits | agent-less, relay, sandbox note |
+| `gpt-6.1-sol` | included | included | agent tried first, learned per account; relay, sandbox note |
+| `gpt-6-sol` | included | included | agent tried first, learned per account; relay, sandbox note |
+| `gpt-6-astra` | paid (Premium) | Copilot credits | agent-less, relay |
+| `gpt-6-think-deeper` | paid (Premium) | included, not metered | agent-less, relay |
+| `gpt-5.6-think-deeper` | included | included | agent, relay |
+| `gpt-5.5-think-deeper` | included | included | agent, relay |
+| `m365-copilot` | included | included | agent |
+| `quick` | included | included | agent |
+| `gpt-5.6-quick` | included | included | agent |
+| `claude-opus` | paid (Premium) | priority access, 40/day and 75/week | agent, relay |
+| `claude-opus-4.8` | included, premium accounts only | included, not metered | agent, relay |
+| `claude-sonnet-5.5` | paid (Premium) | priority access, 80/day | agent-less, relay |
+| `claude-sonnet-5` | paid (Premium) | included, not metered | agent-less, relay |
+| `claude-sonnet` | included | included | agent-less, relay |
+| `claude-sonnet-think-deeper` | included | included | agent-less, relay |
+| `claude-fable` | included | Copilot credits | agent-less, relay |
+| `gpt-5.4-think-deeper` | included | included | agent, relay |
+| `gpt-5.4-quick` | included | included | agent |
+| `gpt-5.3-quick` | included | included | agent |
+| `gpt-5.3-think-deeper` | included | included | agent, relay |
+| `gpt-5.2-quick` | included | included | agent |
+| `gpt-5.2-think-deeper` | included | included | agent, relay |
+| `local-title` | none: answered by the proxy | free, no M365 call | none |
+
+One tone can be two models: M365 picks the version by scenario. `Claude_Opus` is Opus 5.5
+on the paid scenario and Opus 4.8 on the included one, and `Claude_Sonnet` is Sonnet 5.5
+on the paid scenario and Sonnet 4.6 on the included one. That is why `claude-opus` and
+`claude-opus-4.8` are listed separately though they share a tone.
+
+The scenarios, the agent routes and the refusals below come from the reference project's
+measurements ([cramt/m365-copilot-proxy](https://github.com/cramt/m365-copilot-proxy),
+`docs/m365-copilot-api.md` §5 and quirks #21 and #25). They have not been measured live
+in this plugin.
+
+### Aliases
+
 Each model is listed once. Some ids used to appear alongside a twin that selects the same
-tone, so the picker showed the model twice. They are no longer listed, but they are still
-accepted, with or without the `m365/` prefix:
+tone, so the picker showed the model twice, and the Claude models are also accepted by
+version. These ids are not listed, but they are still accepted, with or without the
+`m365/` prefix:
 
 | Accepted, not listed | Listed as |
 |---|---|
 | `auto` | `m365-copilot` |
-| `claude` | `claude-sonnet` |
+| `claude`, `claude-sonnet-4.6`, `claude-sonnet-4.5` | `claude-sonnet` |
+| `claude-opus-5.5`, `claude-opus-5` | `claude-opus` |
+| `claude-opus-4.5` | `claude-opus-4.8` |
+| `claude-fable-5.1` | `claude-fable` |
 | `gpt-5.5`, `gpt-5.5-quick` | `quick` |
 | `gpt-5.6` | `gpt-5.6-quick` |
 | `think-deeper` | `gpt-5.5-think-deeper` |
@@ -366,13 +420,52 @@ accepted, with or without the `m365/` prefix:
 A saved default model that names one of these is moved to the listed id at startup, since
 opencode only loads a default its catalogue lists.
 
-**GPT-6 Sol** (`m365/gpt-6.2-sol`, `m365/gpt-6.1-sol`, `m365/gpt-6-sol`) are reasoning
-models that every account can reach. Their tool turns go **without** the Copilot Studio
-agent: the reference project's notes find that Sol serves with the agent only on a
-premium account, and on any other account that route returns nothing. Without the agent
-the fenced tool contract still applies, but tool use is less reliable, and Sol has a
-remote bash sandbox of its own (`/mnt/data`), so its tool turns use the relay framing
-and ask it to use your terminal instead. Their tool calling has not been measured here.
+### Premium models and the paid scenario
+
+Most models go out on M365's included scenario (`OfficeWebIncludedCopilot`). Opus 5.5,
+Sonnet 5.5, Sonnet 5, GPT-6 (Think Deeper) and GPT-6 Astra serve only on the paid
+scenario, so their turns go out on `OfficeWebPaidCopilot` with `licenseType=Premium`, the
+pair the reference project and the web client send. Their picker names say "Premium".
+Opus 4.8 is on the included scenario but serves only on a premium account, and says
+"Premium" too.
+
+Two refusals are specific to these models. Both come back as a non-retryable
+`m365_not_served` error (see [Errors and the turn log](#errors-and-the-turn-log)), never
+as an empty reply, and the error's `param` says which one it was:
+
+| `param` | When | What M365 sends |
+|---|---|---|
+| `premium_licence_required` | A paid-scenario model on a seat without a premium Copilot licence | `result.value: "ForbiddenRequest"`, `errorCode: "InvalidCopilotLicense"`, and a licence message. The error says the model needs a premium Microsoft 365 Copilot licence |
+| `priority_access_exhausted` | Opus 5.5 or Sonnet 5.5 has used up its priority-access allowance ([What it costs](#what-it-costs)) | `result.value: "OutOfCredits"` and the refusal text in the final item only, never streamed. The error says the allowance is used up and resets at midnight UTC (the weekly one on Monday), with M365's text appended. The proxy does not send "continue" retries for it |
+
+### Tool turns per model
+
+The agent can override the tone: with it attached, a Claude or reasoning tone may be
+answered on GPT, or not at all, depending on the tone and the account. The proxy
+therefore attaches the agent only on turns that carry tools, so plain chat always
+reaches the model the tone selects. On tool turns it follows the reference project's
+measured routes:
+
+- **Chat GPT tones** (`quick`, `m365-copilot`, the `-quick` models) take the agent and the
+  default framing.
+- **GPT-5.x reasoning tones** take the agent with the relay framing (below).
+- **Claude goes agent-less, as a relay**, except Opus. The reference project found that on
+  a non-premium account Claude Sonnet with the agent is a dead route (a canned apology,
+  `InternalError`), and that agent-less Claude makes tool calls reliably. Both Opus models
+  take the agent. **This changed `claude-sonnet` and `claude-sonnet-think-deeper`**, which
+  used to carry the agent.
+- **GPT-6 (Think Deeper) and GPT-6 Astra** go agent-less as a relay: GPT-6 with the agent
+  is a dead route on every account.
+- **GPT-6.2 Sol and GPT-6.2 Astra** go agent-less as a relay, with a note asking the model
+  to use your terminal rather than its own remote bash sandbox (`/mnt/data`).
+- **GPT-6 Sol and GPT-6.1 Sol** serve with the agent only on a premium account, and
+  nothing on the token says which kind of account it is, so the proxy learns it. The
+  first tool turn on each carries the agent. If that turn comes back as a dead route
+  (`InternalError` with no content), the tone is marked agent-dead for the life of the
+  proxy and the request is re-sent agent-less, in a fresh conversation, with the relay
+  framing and the sandbox note. Once the agent has answered for a tone, a later
+  `InternalError` is treated as an ordinary refusal. `M365_FORCE_AGENT=0` never attaches
+  the agent to these two, and `M365_FORCE_AGENT=1` always does and never falls back.
 
 Tool-calling on a live tenant (2026-11-09, one non-Premium account, a single file-read
 task per run; small samples):
@@ -388,8 +481,9 @@ task per run; small samples):
 The reference project's README reports 100% tool compliance for `gpt-5.5-think-deeper`;
 its protocol notes (`m365-copilot-api.md`, quirk #13) say reasoning tones disengage with
 an agent attached. Our runs agree with the notes. Reasoning tones still serve plain chat.
+No other model's tool calling has been measured here.
 
-The reasoning tones now get a different framing on tool turns. The tool block is
+The reasoning tones and Claude get a different framing on tool turns. The tool block is
 worded as the user asking to be guided through their own terminal, one command at a
 time, pasting back the real output (the reference project's `relay`). A model that
 doubts it can reach the workspace has nothing to doubt, because the user runs the
@@ -400,14 +494,6 @@ commands. Measured on `gpt-5.5-think-deeper` on 2026-11-10, 16 conversations:
 | Default, before the give-up nudge | 4/4 | 1/4 |
 | Default, with the nudge | 8/8 | 5/8 |
 | Relay, with the nudge | 0/4 | 4/4, with no nudge needed |
-
-Claude tones stay on the agent, which M365 answers on GPT. The reference project ran
-Claude without the agent and with `relay`, but an account with no Claude licence then
-refuses every tool turn, and that could not be measured on a licensed account here.
-
-A non-default tone (Claude, the reasoning tones) only takes effect when **no** agent is
-attached — with one, M365 silently routes to GPT regardless. The proxy therefore attaches
-the agent only on turns that carry tools, so plain chat reaches the model the tone selects.
 
 ### Reading your Microsoft 365 work
 
@@ -445,6 +531,84 @@ instructions are never attached and no tool-call parsing runs on the reply — C
 its own built-in agent instead. Keep a coding model selected for coding, and switch to
 `m365/work` to ask about your mail, Teams or files. Read-only: Copilot searches and
 summarises, it does not send a message or edit a file.
+
+## What it costs
+
+Every figure here comes from the reference project's protocol notes
+([cramt/m365-copilot-proxy](https://github.com/cramt/m365-copilot-proxy),
+`docs/m365-copilot-api.md` §5 including its priority-access sections, §7 "Throttling &
+quotas", and quirks #11 and #26). None has been measured from this plugin.
+
+| Model | Access | Cost | Notes |
+|---|---|---|---|
+| `work` | included | included | Grounded on your own account |
+| `work-think` | included | included | Grounded on your own account |
+| `gpt-6.2-sol` | included | included | The paid scenario would spend a `GPT62SolQuery*` budget; the plugin stays off it |
+| `gpt-6.2-astra` | included | Copilot credits, every turn | The paid scenario would also spend a `GPT62AstraQuery*` budget; the plugin stays off it |
+| `gpt-6.1-sol` | included | included | The paid scenario would spend a 40/day, 75/week allowance; the plugin stays off it |
+| `gpt-6-sol` | included | included | |
+| `gpt-6-astra` | premium, paid scenario | Copilot credits, every turn | |
+| `gpt-6-think-deeper` | premium, paid scenario | included | Gated, not metered |
+| `gpt-5.6-think-deeper` | included | included | |
+| `gpt-5.5-think-deeper` | included | included | |
+| `m365-copilot` | included | included | |
+| `quick` | included | included | The default |
+| `gpt-5.6-quick` | included | included | |
+| `claude-opus` | premium, paid scenario | priority access: 40 turns a day, 75 a week | Opus 5.5 |
+| `claude-opus-4.8` | premium-only, on the included scenario | included | Gated, not metered |
+| `claude-sonnet-5.5` | premium, paid scenario | priority access: 80 turns a day (150 a week, which never binds) | |
+| `claude-sonnet-5` | premium, paid scenario | included | Gated, not metered |
+| `claude-sonnet` | included | included | Sonnet 4.6 |
+| `claude-sonnet-think-deeper` | included | included | |
+| `claude-fable` | included | Copilot credits, every turn | Fable 5.1 |
+| `gpt-5.4-think-deeper` | included | included | |
+| `gpt-5.4-quick` | included | included | |
+| `gpt-5.3-quick` | included | included | |
+| `gpt-5.3-think-deeper` | included | included | |
+| `gpt-5.2-quick` | included | included | |
+| `gpt-5.2-think-deeper` | included | included | |
+| `local-title` | none | free | Answered by the proxy, no M365 call |
+
+Aliases cost the same as the model they point at ([Aliases](#aliases)).
+
+**Copilot credits.** Claude Fable 5.1, GPT-6.2 Astra and GPT-6 Astra are billed to the
+user's Copilot credits on every turn. M365's web client marks them "Uses credits", and
+each of their StreamHub turns reports a `billing_info` charge (`PremiumModelsInM365Chat`).
+The plugin neither reads nor shows that charge.
+
+**Priority access.** Two models spend a small allowance, one unit per M365 turn whatever
+its size, and only on the paid scenario:
+
+- **Opus 5.5** (`claude-opus`): **40 turns a day and 75 a week**, resetting at midnight
+  UTC, the weekly one on Monday.
+- **Sonnet 5.5** (`claude-sonnet-5.5`): **80 a day and 150 a week**. The weekly allowance
+  has been observed resetting at midnight UTC every day, not only on Monday, so with 80 a
+  day the 150 never binds.
+
+Opus 4.8 (on the included scenario), Sonnet 5 and GPT-6 (Think Deeper) are gated on a
+premium licence but **not** metered. When an allowance runs out, M365 ends the turn with
+its refusal text, which the plugin surfaces as `priority_access_exhausted`
+([Premium models and the paid scenario](#premium-models-and-the-paid-scenario)). A
+refused turn costs no allowance.
+
+**Not spent by the plugin.** GPT-6.1 Sol's paid-scenario allowance (40 a day, 75 a week)
+and GPT-6.2 Sol's and GPT-6.2 Astra's `*Query*` budgets apply only on the paid scenario.
+The plugin routes the Sol models and GPT-6.2 Astra on the included scenario, which
+carries no metering.
+
+**Limits on every model.**
+
+- **600 user messages per conversation.** Every "continue" retry, give-up nudge and
+  `mcp` search answered in the proxy counts as one, and so does a cancelled turn. The
+  plugin reuses one conversation per opencode session and sends only the new messages
+  (delta mode), and reports what is left in `usage.x_m365_conversation_remaining`.
+- **An account-level throttle on conversations started.** It is why session titles are
+  answered locally ([Why session titles are answered locally](#why-session-titles-are-answered-locally)).
+  Heavy use degrades into Disengaged or empty replies, which recover after a lull of
+  about 15 minutes. Signing in again does not clear it.
+
+**Included at no extra cost:** everything else (`quick`, the GPT-5.x tones, Sonnet 4.6,
+the Sol models, `m365-copilot`, the work models), within the limits above.
 
 ## Authentication
 
@@ -505,7 +669,7 @@ annotation. Only images new to a turn are uploaded: M365 already holds the earli
 
 ## Limits
 
-- **600 user messages per conversation.** The proxy reuses one conversation per task,
+- **600 user messages per conversation** (see [What it costs](#what-it-costs)). The proxy reuses one conversation per task,
   sends only new messages, and reports the remaining budget in
   `usage.x_m365_conversation_remaining`. A task is the opencode session on opencode 2,
   or the system prompt plus the first user message otherwise; turns within one task run
