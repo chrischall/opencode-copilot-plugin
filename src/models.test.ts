@@ -163,18 +163,27 @@ describe("compatibility aliases", () => {
     ["gpt-5.6", "gpt-5.6-quick"],
     // And the reasoning tone's generic id.
     ["think-deeper", "gpt-5.5-think-deeper"],
+    // The Claude models, by the versions M365 serves on each scenario.
+    ["claude-sonnet-4.6", "claude-sonnet"],
+    ["claude-sonnet-4.5", "claude-sonnet"],
+    ["claude-opus-5.5", "claude-opus"],
+    ["claude-opus-5", "claude-opus"],
+    ["claude-opus-4.5", "claude-opus-4.8"],
+    ["claude-fable-5.1", "claude-fable"],
   ];
 
   it("advertises one coding model per tone", () => {
     const coding = MODELS.filter((model) => model.tone && !model.grounded);
     // Keyed on the scenario too: one tone on the paid scenario can be another model.
-    const tones = coding.map((model) => `${model.tone}|${(model as { scenario?: string }).scenario ?? "included"}`);
+    const tones = coding.map((model) => `${model.tone}|${model.scenario ?? "included"}`);
     expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
   });
 
-  it("advertises one chat model per chat tone", () => {
+  it("advertises one chat model per chat tone and scenario", () => {
+    // `Claude_Opus` is two models, Opus 5.5 on the paid scenario and Opus 4.8 on the
+    // included one, so the pair is what has to be unique.
     const chat = MODELS.filter((model) => model.tone && !model.reasoning && !model.grounded);
-    const tones = chat.map((model) => model.tone);
+    const tones = chat.map((model) => `${model.tone}/${model.scenario ?? "included"}`);
     expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
   });
 
@@ -257,5 +266,101 @@ describe("GPT-6 Sol models", () => {
 
   it("leaves the default model alone", () => {
     expect(DEFAULT_MODEL).toBe("quick");
+  });
+});
+
+describe("the models the reference project maps", () => {
+  // From the reference project's protocol notes (`m365-copilot-api.md` §5) and its
+  // `MODEL_TONES`, `PAID_SCENARIO_TONES`, `PAID_SCENARIO_MODELS` and
+  // `INCLUDED_SCENARIO_MODELS`.
+  const table: Array<{
+    id: string;
+    tone: string;
+    reasoning: boolean;
+    scenario?: "paid";
+    credits?: boolean;
+    metered?: boolean;
+    name: string;
+  }> = [
+    { id: "gpt-6-think-deeper", tone: "Gpt_6_Reasoning", reasoning: true, scenario: "paid", name: "GPT-6 (Think Deeper)" },
+    { id: "gpt-6-astra", tone: "Gpt_6_Astra_Reasoning", reasoning: true, scenario: "paid", credits: true, name: "GPT-6 Astra" },
+    { id: "gpt-6.2-astra", tone: "Gpt_62_Astra_Reasoning", reasoning: true, credits: true, name: "GPT-6.2 Astra" },
+    { id: "claude-opus", tone: "Claude_Opus", reasoning: false, scenario: "paid", metered: true, name: "Claude Opus 5.5" },
+    { id: "claude-opus-4.8", tone: "Claude_Opus", reasoning: false, name: "Claude Opus 4.8" },
+    { id: "claude-sonnet-5.5", tone: "Claude_Sonnet", reasoning: false, scenario: "paid", metered: true, name: "Claude Sonnet 5.5" },
+    { id: "claude-sonnet-5", tone: "Claude_Sonnet_5", reasoning: false, scenario: "paid", name: "Claude Sonnet 5" },
+    { id: "claude-fable", tone: "Claude_Fable", reasoning: false, credits: true, name: "Claude Fable 5.1" },
+  ];
+
+  it.each(table)("$id selects $tone", (row) => {
+    const model = resolveModel(row.id);
+    expect(model.id).toBe(row.id);
+    expect(model.tone).toBe(row.tone);
+    expect(model.reasoning).toBe(row.reasoning);
+    expect(model.grounded).toBeFalsy();
+    expect(resolveModel(`m365/${row.id}`).id).toBe(row.id);
+  });
+
+  it.each(table)("$id is on the $scenario scenario, with its credits and metering", (row) => {
+    const model = resolveModel(row.id);
+    expect(model.scenario).toBe(row.scenario);
+    expect(Boolean(model.credits)).toBe(Boolean(row.credits));
+    expect(Boolean(model.metered)).toBe(Boolean(row.metered));
+  });
+
+  it.each(table)("$id says what it is in the picker", (row) => {
+    expect(resolveModel(row.id).name).toMatch(new RegExp(`^Code · ${row.name.replace(/[().]/g, "\\$&")}`));
+  });
+
+  it("marks every credit-billed model in its name, and no other", () => {
+    for (const model of MODELS) {
+      if (model.credits) expect(model.name, model.id).toMatch(/uses Copilot credits/);
+      else expect(model.name, model.id).not.toMatch(/credits/);
+    }
+  });
+
+  it("marks every paid-scenario model Premium, so a refusal is no surprise", () => {
+    for (const model of MODELS.filter((candidate) => candidate.scenario === "paid")) {
+      expect(model.name, model.id).toMatch(/Premium/);
+    }
+  });
+
+  it("marks Opus 4.8 Premium too: it serves only on a premium account", () => {
+    expect(resolveModel("claude-opus-4.8").scenario).toBeUndefined();
+    expect(resolveModel("claude-opus-4.8").name).toMatch(/Premium/);
+  });
+
+  it("names the included Sonnet by its version", () => {
+    expect(resolveModel("claude-sonnet").name).toContain("Claude Sonnet 4.6");
+    expect(resolveModel("claude-sonnet").scenario).toBeUndefined();
+  });
+
+  it("leaves every model that was already listed on the included scenario, unmetered and free", () => {
+    for (const id of ["quick", "work", "work-think", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.2-sol", "claude-sonnet", "claude-sonnet-think-deeper"]) {
+      const model = resolveModel(id);
+      expect(model.scenario, id).toBeUndefined();
+      expect(model.credits, id).toBeFalsy();
+      expect(model.metered, id).toBeFalsy();
+    }
+  });
+
+  it("lists Opus 5.5 and Opus 4.8 as two models, though they share a tone", () => {
+    const ids = listModelIds();
+    expect(ids).toContain("claude-opus");
+    expect(ids).toContain("claude-opus-4.8");
+  });
+
+  it("keeps the default model", () => {
+    expect(DEFAULT_MODEL).toBe("quick");
+  });
+
+  it("puts every new model in opencode's catalogue, with tools on", () => {
+    const infos = buildModelInfos();
+    for (const row of table) {
+      const info = infos.find((candidate) => candidate.id === row.id);
+      expect(info, row.id).toBeDefined();
+      expect(info!.capabilities.tools).toBe(true);
+      expect(info!.name).toBe(resolveModel(row.id).name);
+    }
   });
 });

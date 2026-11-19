@@ -26,7 +26,27 @@ export interface ModelInfo {
    * `WorkSearch`). Off for coding/web models; on for the `work*` models.
    */
   grounded?: boolean;
+  /**
+   * `paid`: the turn goes out on M365's paid scenario (`OfficeWebPaidCopilot`), the
+   * only one that serves this model. Absent means the included scenario. A seat
+   * without a premium Copilot licence is refused on the paid scenario.
+   */
+  scenario?: "paid";
+  /** M365 charges each turn to the user's Copilot credits. */
+  credits?: boolean;
+  /** Each turn spends a small priority-access allowance that resets at midnight UTC. */
+  metered?: boolean;
   limit: { context: number; output: number };
+}
+
+/** What sets a model apart beyond its tone; every flag defaults to off. */
+interface ModelOptions {
+  grounded?: boolean;
+  scenario?: "paid";
+  credits?: boolean;
+  metered?: boolean;
+  /** Serves only on a premium account, though on the included scenario (Opus 4.8). */
+  premium?: boolean;
 }
 
 /**
@@ -66,14 +86,21 @@ export const MODELS: readonly ModelInfo[] = [
   // Mailbox-grounded models: select these in opencode (as `m365/work` /
   // `m365/work-think`) to ask about your own mail, calendar and files — Copilot
   // searches them server-side. The other models stay coding/web-only.
-  m("work", "Ask your mail, Teams & files", "magic", false, true),
-  m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, true),
+  m("work", "Ask your mail, Teams & files", "magic", false, { grounded: true }),
+  m("work-think", "Ask your mail, Teams & files (Think Deeper)", "Gpt_5_5_Reasoning", true, { grounded: true }),
   // GPT-6 Sol: reasoning models on the included scenario, so every account can reach
   // them. They take the tool agent only on a premium account, so tool turns go
   // agent-less (see `toolRouteFor`). Tool use not yet measured here.
   m("gpt-6.2-sol", "GPT-6.2 Sol", "Gpt_62_Sol_Reasoning", true),
+  // GPT-6.2 Astra: the included scenario, like GPT-6.2 Sol, but every turn is charged
+  // to the user's Copilot credits.
+  m("gpt-6.2-astra", "GPT-6.2 Astra", "Gpt_62_Astra_Reasoning", true, { credits: true }),
   m("gpt-6.1-sol", "GPT-6.1 Sol", "Gpt_61_Sol_Reasoning", true),
   m("gpt-6-sol", "GPT-6 Sol", "Gpt_6_Sol_Reasoning", true),
+  // GPT-6 and GPT-6 Astra serve only on the paid scenario: the included one answers
+  // with M365's canned apology. Astra is also billed to Copilot credits.
+  m("gpt-6-astra", "GPT-6 Astra", "Gpt_6_Astra_Reasoning", true, { scenario: "paid", credits: true }),
+  m("gpt-6-think-deeper", "GPT-6 (Think Deeper)", "Gpt_6_Reasoning", true, { scenario: "paid" }),
   m("gpt-5.6-think-deeper", "GPT-5.6 (Think Deeper)", "Gpt_5_6_Reasoning", true),
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
@@ -82,8 +109,19 @@ export const MODELS: readonly ModelInfo[] = [
   // project measured 7/30, and our one run made none. Listed after the default and
   // labelled, rather than dropped, because it is fine for plain chat.
   m("gpt-5.6-quick", "GPT-5.6 (Quick, unreliable tool calls)", "Gpt_5_6_Chat", false),
-  m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
+  // Claude. A tone is not always one model: M365 picks the version by scenario.
+  // `Claude_Opus` is Opus 5.5 on the paid scenario (metered by a priority-access
+  // allowance) and Opus 4.8 on the included one (premium accounts only, unmetered).
+  // `Claude_Sonnet` is Sonnet 4.6 on the included scenario and Sonnet 5.5 on the paid
+  // one (metered). `Claude_Sonnet_5` is Sonnet 5 on the paid scenario.
+  m("claude-opus", "Claude Opus 5.5", "Claude_Opus", false, { scenario: "paid", metered: true }),
+  m("claude-opus-4.8", "Claude Opus 4.8", "Claude_Opus", false, { premium: true }),
+  m("claude-sonnet-5.5", "Claude Sonnet 5.5", "Claude_Sonnet", false, { scenario: "paid", metered: true }),
+  m("claude-sonnet-5", "Claude Sonnet 5", "Claude_Sonnet_5", false, { scenario: "paid" }),
+  m("claude-sonnet", "Claude Sonnet 4.6", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),
+  // Claude Fable 5.1: the included scenario, billed to Copilot credits.
+  m("claude-fable", "Claude Fable 5.1", "Claude_Fable", false, { credits: true }),
   m("gpt-5.4-think-deeper", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
   m("gpt-5.4-quick", "GPT-5.4 (Quick)", "Gpt_5_4_Chat", false),
   m("gpt-5.3-quick", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
@@ -93,15 +131,28 @@ export const MODELS: readonly ModelInfo[] = [
   m(LOCAL_TITLE_MODEL, "Local titler (no M365 call)", null, false),
 ];
 
-function m(id: string, name: string, tone: string | null, reasoning: boolean, grounded = false): ModelInfo {
+function m(id: string, name: string, tone: string | null, reasoning: boolean, options: ModelOptions = {}): ModelInfo {
+  const { grounded = false, scenario, credits, metered, premium } = options;
   return {
     id,
-    name: pickerName(name, tone, grounded),
+    name: pickerName(withLabels(name, { premium: premium || scenario === "paid", credits }), tone, grounded),
     tone,
     reasoning,
     grounded,
+    ...(scenario ? { scenario } : {}),
+    ...(credits ? { credits } : {}),
+    ...(metered ? { metered } : {}),
     limit: { context: CONTEXT_TOKENS, output: OUTPUT_TOKENS },
   };
+}
+
+/**
+ * Say in the name what a user should know before picking: that the model needs a
+ * premium Copilot licence (so a refusal is no surprise), and that it spends credits.
+ */
+function withLabels(name: string, labels: { premium?: boolean; credits?: boolean }): string {
+  const tags = [labels.premium ? "Premium" : null, labels.credits ? "uses Copilot credits" : null].filter(Boolean);
+  return tags.length ? `${name} (${tags.join(", ")})` : name;
 }
 
 /**
@@ -138,6 +189,13 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = {
   // `think-deeper` is the generic id for GPT-5.5's reasoning tone; the descriptive id
   // is the one the README measures.
   "think-deeper": "gpt-5.5-think-deeper",
+  // The Claude models by version, as the reference project accepts them.
+  "claude-sonnet-4.6": "claude-sonnet",
+  "claude-sonnet-4.5": "claude-sonnet",
+  "claude-opus-5.5": "claude-opus",
+  "claude-opus-5": "claude-opus",
+  "claude-opus-4.5": "claude-opus-4.8",
+  "claude-fable-5.1": "claude-fable",
 };
 
 /** The canonical id for an alias, or the id unchanged. */

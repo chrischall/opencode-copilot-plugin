@@ -79,6 +79,16 @@ describe("service endpoints", () => {
     for (const alias of ["auto", "claude", "gpt-5.4", "gpt-5.3", "gpt-5.2"]) expect(ids).not.toContain(alias);
   });
 
+  it("lists the paid, credit-billed and metered models, not their aliases", async () => {
+    const { url } = await start();
+    const body: any = await (await authedFetch(`${url}/v1/models`)).json();
+    const ids = body.data.map((m: any) => m.id);
+    for (const id of ["gpt-6-think-deeper", "gpt-6-astra", "gpt-6.2-astra", "claude-opus", "claude-opus-4.8", "claude-sonnet-5.5", "claude-sonnet-5", "claude-fable"]) {
+      expect(ids).toContain(id);
+    }
+    for (const alias of ["claude-opus-5.5", "claude-opus-4.5", "claude-sonnet-4.6", "claude-fable-5.1"]) expect(ids).not.toContain(alias);
+  });
+
   it("404s an unknown path instead of hanging", async () => {
     const { url } = await start();
     expect((await authedFetch(`${url}/nope`)).status).toBe(404);
