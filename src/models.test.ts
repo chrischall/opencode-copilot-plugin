@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { buildModelInfos } from "./config.js";
 import {
   DEFAULT_MODEL,
   LOCAL_TITLE_MODEL,
+  MODEL_ALIASES,
   MODELS,
   isLocalModel,
   listModelIds,
@@ -144,5 +146,56 @@ describe("how each tone is asked to call tools", () => {
 
   it("leaves Claude on the agent, since an unlicensed account refuses Claude without it", () => {
     for (const tone of ["Claude_Sonnet", "Claude_Sonnet_Reasoning"]) expect(toolRouteFor(tone)).toEqual({ framing: "default", agent: true });
+  });
+});
+
+describe("compatibility aliases", () => {
+  // Each pair once showed twice in opencode's picker under one name.
+  const pairs: Array<[alias: string, canonical: string]> = [
+    ["auto", "m365-copilot"],
+    ["claude", "claude-sonnet"],
+    ["gpt-5.4", "gpt-5.4-think-deeper"],
+    ["gpt-5.3", "gpt-5.3-quick"],
+    ["gpt-5.2", "gpt-5.2-quick"],
+  ];
+
+  it("advertises unique ids and no duplicate picker names", () => {
+    const names = MODELS.map((model) => model.name);
+    expect(new Set(names).size, `duplicate names: ${names.filter((n, i) => names.indexOf(n) !== i)}`).toBe(names.length);
+    const ids = listModelIds();
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("maps each alias to its canonical id", () => {
+    expect(Object.entries(MODEL_ALIASES).sort()).toEqual([...pairs].sort());
+  });
+
+  it.each(pairs)("%s resolves to the same model as %s", (alias, canonical) => {
+    expect(resolveModel(alias)).toBe(resolveModel(canonical));
+    expect(resolveModel(alias).id).toBe(canonical);
+  });
+
+  it.each(pairs)("the prefixed m365/%s still resolves", (alias, canonical) => {
+    expect(resolveModel(`m365/${alias}`).id).toBe(canonical);
+  });
+
+  it("keeps aliases out of every advertised list", () => {
+    const aliases = Object.keys(MODEL_ALIASES);
+    for (const id of [...listModelIds(), ...buildModelInfos().map((model) => model.id)]) {
+      expect(aliases).not.toContain(id);
+    }
+  });
+
+  it("leaves the canonical models' tone, reasoning and grounding unchanged", () => {
+    expect(resolveModel("auto")).toMatchObject({ tone: "magic", reasoning: false, grounded: false });
+    expect(resolveModel("claude")).toMatchObject({ tone: "Claude_Sonnet", reasoning: false });
+    expect(resolveModel("gpt-5.4")).toMatchObject({ tone: "Gpt_5_4_Reasoning", reasoning: true });
+    expect(resolveModel("gpt-5.3")).toMatchObject({ tone: "Gpt_5_3_Chat", reasoning: false });
+    expect(resolveModel("gpt-5.2")).toMatchObject({ tone: "Gpt_5_2_Chat", reasoning: false });
+  });
+
+  it("keeps the catalogue order, with the local titler last", () => {
+    expect(listModelIds().slice(0, 3)).toEqual(["work", "work-think", "gpt-5.6-think-deeper"]);
+    expect(listModelIds().at(-1)).toBe(LOCAL_TITLE_MODEL);
   });
 });

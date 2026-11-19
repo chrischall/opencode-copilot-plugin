@@ -71,6 +71,14 @@ describe("service endpoints", () => {
     expect(body.data.map((m: any) => m.id)).toContain(DEFAULT_MODEL);
   });
 
+  it("lists canonical ids only, not the compatibility aliases", async () => {
+    const { url } = await start();
+    const body: any = await (await authedFetch(`${url}/v1/models`)).json();
+    const ids = body.data.map((m: any) => m.id);
+    expect(ids).toContain("m365-copilot");
+    for (const alias of ["auto", "claude", "gpt-5.4", "gpt-5.3", "gpt-5.2"]) expect(ids).not.toContain(alias);
+  });
+
   it("404s an unknown path instead of hanging", async () => {
     const { url } = await start();
     expect((await authedFetch(`${url}/nope`)).status).toBe(404);

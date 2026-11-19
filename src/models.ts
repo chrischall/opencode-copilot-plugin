@@ -73,7 +73,6 @@ export const MODELS: readonly ModelInfo[] = [
   m("gpt-5.5", "GPT-5.5", "Gpt_5_5_Chat", false),
   m("gpt-5.5-quick", "GPT-5.5 (Quick)", "Gpt_5_5_Chat", false),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
-  m("auto", "M365 Copilot (Auto)", "magic", false),
   m("quick", "GPT (Quick)", "Gpt_5_5_Chat", false),
   m("think-deeper", "GPT (Think Deeper)", "Gpt_5_5_Reasoning", true),
   // Live, but it writes a tool call far less often than `quick`: the reference
@@ -82,15 +81,11 @@ export const MODELS: readonly ModelInfo[] = [
   m("gpt-5.6", "GPT-5.6 (unreliable tool calls)", "Gpt_5_6_Chat", false),
   m("gpt-5.6-quick", "GPT-5.6 (Quick, unreliable tool calls)", "Gpt_5_6_Chat", false),
   m("claude-sonnet", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
-  m("claude", "Claude Sonnet (via M365)", "Claude_Sonnet", false),
   m("claude-sonnet-think-deeper", "Claude Sonnet (Think Deeper)", "Claude_Sonnet_Reasoning", true),
-  m("gpt-5.4", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
   m("gpt-5.4-think-deeper", "GPT-5.4 (Think Deeper)", "Gpt_5_4_Reasoning", true),
   m("gpt-5.4-quick", "GPT-5.4 (Quick)", "Gpt_5_4_Chat", false),
-  m("gpt-5.3", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
   m("gpt-5.3-quick", "GPT-5.3 (Quick)", "Gpt_5_3_Chat", false),
   m("gpt-5.3-think-deeper", "GPT-5.3 (Think Deeper)", "Gpt_5_3_Reasoning", true),
-  m("gpt-5.2", "GPT-5.2 (Quick)", "Gpt_5_2_Chat", false),
   m("gpt-5.2-quick", "GPT-5.2 (Quick)", "Gpt_5_2_Chat", false),
   m("gpt-5.2-think-deeper", "GPT-5.2 (Think Deeper)", "Gpt_5_2_Reasoning", true),
   m(LOCAL_TITLE_MODEL, "Local titler (no M365 call)", null, false),
@@ -117,12 +112,34 @@ function pickerName(name: string, tone: string | null, grounded: boolean): strin
   return `${grounded ? "Work" : "Code"} · ${name}`;
 }
 
-const BY_ID = new Map(MODELS.map((model) => [model.id, model]));
+/**
+ * Ids we accept but no longer advertise, each mapped to the canonical id it means.
+ *
+ * Each pair used to be advertised twice under one picker name, so opencode listed the
+ * model twice. The canonical id is the descriptive one: `m365-copilot` is the id the
+ * README documents and measured, and the GPT ids carry their tone suffix like their
+ * siblings (`-quick`, `-think-deeper`). The short forms stay accepted, with or without
+ * the `m365/` prefix, so saved configs keep working.
+ */
+export const MODEL_ALIASES: Readonly<Record<string, string>> = {
+  auto: "m365-copilot",
+  claude: "claude-sonnet",
+  "gpt-5.4": "gpt-5.4-think-deeper",
+  "gpt-5.3": "gpt-5.3-quick",
+  "gpt-5.2": "gpt-5.2-quick",
+};
+
+const BY_ID = new Map<string, ModelInfo>(MODELS.map((model) => [model.id, model]));
+for (const [alias, canonical] of Object.entries(MODEL_ALIASES)) {
+  const model = BY_ID.get(canonical);
+  if (!model) throw new Error(`model alias ${alias} points at unknown id ${canonical}`);
+  BY_ID.set(alias, model);
+}
 
 /**
  * Look up a model, falling back to the default for anything we do not know.
  *
- * Harnesses routinely send ids we never advertised (aliases, stale config, a model
+ * Harnesses routinely send ids we never advertised (`MODEL_ALIASES`, stale config, a model
  * string typed by hand). Answering on the default beats rejecting the request.
  */
 export function resolveModel(id: string | undefined | null): ModelInfo {
