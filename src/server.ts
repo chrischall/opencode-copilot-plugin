@@ -770,7 +770,7 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
   }
 
   if (error instanceof M365UnavailableError) {
-    refuse(response, streaming, "m365_not_served", error.message);
+    refuse(response, streaming, "m365_not_served", error.message, error.reason);
     return;
   }
 
@@ -798,12 +798,12 @@ function handleTurnFailure(response: ServerResponse, error: unknown, streaming: 
  * limit. Type `invalid_request_error` switches off the "try again" rule; the rate
  * limit wording is reworded, since that rule ignores the type.
  */
-function refuse(response: ServerResponse, streaming: boolean, code: string, message: string): void {
+function refuse(response: ServerResponse, streaming: boolean, code: string, message: string, param?: string): void {
   const reworded = message
     .replace(/rate increased too quickly/gi, "sent too fast")
     .replace(/rate[-_\s]?limit/gi, "throttle")
     .replace(/too[_\s]?many[_\s]?requests/gi, "too many turns");
-  finishWithError(response, streaming, NON_RETRYABLE, code, reworded, "invalid_request_error");
+  finishWithError(response, streaming, NON_RETRYABLE, code, reworded, "invalid_request_error", param);
 }
 
 /** Report an error, in whichever shape the client is already reading. */
@@ -814,14 +814,17 @@ function finishWithError(
   code: string,
   message: string,
   type: string = code,
+  param?: string,
 ): void {
+  // `param` says which refusal it was, for a client that wants to act on it.
+  const error = { message, type, code, ...(param ? { param } : {}) };
   if (!streaming) {
-    if (!response.writableEnded) sendJson(response, status, { error: { message, type, code } });
+    if (!response.writableEnded) sendJson(response, status, { error });
     return;
   }
   // Headers are already out on a stream; the error has to ride in the body.
   if (!response.writableEnded) {
-    response.write(`data: ${JSON.stringify({ error: { message, code, type } })}\n\n`);
+    response.write(`data: ${JSON.stringify({ error })}\n\n`);
     response.write(streamDone());
     response.end();
   }

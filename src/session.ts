@@ -130,9 +130,50 @@ export class M365ThrottledError extends Error {
  * this account's licence does not cover, or a tone that is registered but dead.
  */
 export class M365UnavailableError extends Error {
-  constructor(detail: string) {
+  /** Why, when M365 said so in a way the client can act on. */
+  readonly reason?: string;
+  constructor(detail: string, reason?: string) {
     super(`M365 could not serve this model: ${detail}`);
     this.name = "M365UnavailableError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * The paid scenario on a seat without a premium Copilot licence: the final item carries
+ * `result.value: "ForbiddenRequest"` and `errorCode: "InvalidCopilotLicense"`, and
+ * BotConnection explains in words. It is about the account, not the model.
+ */
+export class PremiumLicenceRequiredError extends M365UnavailableError {
+  constructor(said: string) {
+    super(
+      `it needs a premium Microsoft 365 Copilot licence, which this account does not have (InvalidCopilotLicense). Choose a model on the included scenario.${said ? ` M365 said: ${said}` : ""}`,
+      "premium_licence_required",
+    );
+    this.name = "PremiumLicenceRequiredError";
+  }
+}
+
+/** Which priority-access allowance ran out. */
+export type AllowanceWindow = "day" | "week";
+
+/**
+ * A metered model's priority-access allowance is used up: `result.value:
+ * "OutOfCredits"`, the refusal text in `result.message`. The refusal is not streamed,
+ * so a reader of the updates alone would see an empty turn. Both allowances reset at
+ * midnight UTC, the weekly one on Monday (reference project, docs §5 / quirk #26).
+ */
+export class PriorityAccessExhaustedError extends M365UnavailableError {
+  readonly window: AllowanceWindow;
+  constructor(said: string) {
+    const window: AllowanceWindow = /\bweek|monday/i.test(said) ? "week" : "day";
+    const resets = window === "week" ? "midnight UTC on Monday" : "midnight UTC";
+    super(
+      `this model's ${window === "week" ? "weekly" : "daily"} priority-access allowance is used up; it resets at ${resets}. Choose another model until then.${said ? ` M365 said: ${said}` : ""}`,
+      "priority_access_exhausted",
+    );
+    this.name = "PriorityAccessExhaustedError";
+    this.window = window;
   }
 }
 
@@ -603,6 +644,8 @@ interface OutgoingMessage {
 function refusalOf(result: TurnResult, text: string): Error | undefined {
   const detail = [result.errorCode, text.trim()].filter(Boolean).join(": ") || result.resultValue || "no reason given";
   if (result.resultValue === "Throttled") return new M365ThrottledError(detail);
+  if (result.resultValue === "OutOfCredits") return new PriorityAccessExhaustedError(text.trim());
+  if (result.errorCode === "InvalidCopilotLicense") return new PremiumLicenceRequiredError(text.trim());
   if (result.resultValue && result.resultValue !== "Success") return new M365UnavailableError(detail);
   // A tone that is registered but dead answers with a canned apology from here.
   if (result.contentOrigin === "BotConnection") return new M365UnavailableError(`registered but dead (BotConnection): ${detail}`);

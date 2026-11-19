@@ -871,6 +871,9 @@ describe("the turn log", () => {
   });
 });
 
+const OPUS_DAILY =
+  "You've used your available priority access to the Opus model for today. You can choose another available model or wait until tomorrow to use the Opus model again.";
+
 describe("refusals opencode must not retry", () => {
   // opencode always streams, so a refusal reaches it inside a 200 stream, and it then
   // decides from the error's code and wording alone. 2.2.0 got that wrong: a licence
@@ -888,6 +891,20 @@ describe("refusals opencode must not retry", () => {
           result: { value: "InternalError", message: "ClaudeUnavailableForLicense: Claude isn't available with your current license. Choose another model and try again." },
         },
       },
+      completion(),
+    ],
+    "licence (paid scenario)": () => [
+      {
+        type: 2,
+        item: {
+          messages: [{ author: "bot", text: "It looks like you don't have a valid licence. Please try again later.", contentOrigin: "BotConnection" }],
+          result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "It looks like you don't have a valid licence." },
+        },
+      },
+      completion(),
+    ],
+    "priority access exhausted": () => [
+      { type: 2, item: { messages: [], result: { value: "OutOfCredits", message: OPUS_DAILY, creditScenario: "TotalTurn" } } },
       completion(),
     ],
     disengaged: () => [disengaged(), completion()],
@@ -953,6 +970,53 @@ describe("failures the client has to be able to tell apart", () => {
     const body: any = await response.json();
     expect(body.error.code).toBe("m365_not_served");
     expect(body.error.message).toMatch(/Premium license/);
+  });
+
+  it("reports a paid model on a non-premium seat as needing a premium licence", async () => {
+    stub = await startStubCopilot({
+      respond: () => [
+        {
+          type: 2,
+          item: {
+            messages: [{ author: "bot", text: "It looks like you don't have a valid licence.", contentOrigin: "BotConnection" }],
+            result: { value: "ForbiddenRequest", errorCode: "InvalidCopilotLicense", message: "It looks like you don't have a valid licence." },
+          },
+        },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const response = await post(url, { model: "claude-opus", messages: [{ role: "user", content: "hi" }] });
+    expect(response.status).toBe(422);
+    const body: any = await response.json();
+    expect(body.error.code).toBe("m365_not_served");
+    expect(body.error.param).toBe("premium_licence_required");
+    expect(body.error.message).toMatch(/premium Microsoft 365 Copilot licen[cs]e/i);
+    expect(stub.connections).toHaveLength(1);
+  });
+
+  it("reports an exhausted priority-access allowance once, without continue retries", async () => {
+    // The refusal only rides in the final item, so a stream reader would see an empty
+    // turn and nudge it with "continue" — each nudge another refused turn.
+    stub = await startStubCopilot({
+      respond: () => [
+        { type: 2, item: { messages: [], result: { value: "OutOfCredits", message: OPUS_DAILY, creditScenario: "TotalTurn" } } },
+        completion(),
+      ],
+    });
+    const { url } = await start();
+    const text = await (
+      await post(url, { model: "claude-opus", stream: true, messages: [{ role: "user", content: "hi" }], tools: [bashTool] })
+    ).text();
+    const line = text.split("\n").find((l) => l.startsWith("data: {") && l.includes('"error"'));
+    const body = JSON.parse(line!.slice("data: ".length));
+    expect(body.error.code).toBe("m365_not_served");
+    expect(body.error.param).toBe("priority_access_exhausted");
+    expect(body.error.message).toMatch(/allowance .*used up/i);
+    expect(body.error.message).toMatch(/midnight UTC/);
+    expect(body.error.message).toMatch(/Opus model for today/);
+    const chats = stub.connections.flatMap((c) => c.frames.filter((f) => f.type === 4));
+    expect(chats).toHaveLength(1);
   });
 
   it("reports Disengaged distinctly rather than as a generic error", async () => {
