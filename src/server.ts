@@ -74,7 +74,7 @@ import { collectImages } from "./image.js";
 import { firstFenceBody, parseToolCalls } from "./fenced.js";
 import { looksLikeGiveUp, nudgeFor } from "./giveup.js";
 import { createLogger } from "./log.js";
-import { SessionMetricsStore } from "./metrics.js";
+import { METRICS_PATH, SessionMetricsStore } from "./metrics.js";
 
 const log = createLogger("server");
 
@@ -361,6 +361,19 @@ async function handle(request: IncomingMessage, response: ServerResponse, contex
         owned_by: "microsoft",
       })),
     });
+    return;
+  }
+
+  // The session's metrics, for a plugin attached to this proxy with `baseUrl`: the
+  // store lives here, out of that opencode process's reach (`remoteMetrics`).
+  if (method === "GET" && url.pathname.startsWith(`/v1${METRICS_PATH}`)) {
+    let sessionID = "";
+    try {
+      sessionID = decodeURIComponent(url.pathname.slice(`/v1${METRICS_PATH}`.length));
+    } catch {
+      // A malformed escape names no session.
+    }
+    sendJson(response, 200, { metrics: (sessionID && context.metrics.get(sessionID)) || null });
     return;
   }
 

@@ -410,6 +410,23 @@ describe("per-session metrics", () => {
     expect(proxy!.metrics).toBe(metrics);
     expect(metrics.get("ses_x")?.turns).toBe(1);
   });
+
+  it("serves a session's metrics at /v1/m365/metrics/<id>, behind the secret", async () => {
+    // What a plugin attached to this proxy with `baseUrl` reads: the store is in
+    // this process, not in opencode's.
+    stub = await startStubCopilot({ respond: () => [throttling(7, 600), botMessage("ok"), completion()] });
+    const { url } = await start();
+    await postAs(url, "ses/odd id", { messages: [{ role: "user", content: "hi" }] });
+
+    const known = await authedFetch(`${url}/v1/m365/metrics/${encodeURIComponent("ses/odd id")}`);
+    expect(known.status).toBe(200);
+    expect(((await known.json()) as { metrics: unknown }).metrics).toMatchObject({ sessionID: "ses/odd id", turns: 1, conversation: { used: 7, max: 600 } });
+
+    const unknown = await authedFetch(`${url}/v1/m365/metrics/ses_nope`);
+    expect(await unknown.json()).toEqual({ metrics: null });
+
+    expect((await fetch(`${url}/v1/m365/metrics/ses_nope`)).status).toBe(401);
+  });
 });
 
 describe("grounded models carry no tools", () => {

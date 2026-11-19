@@ -103,7 +103,8 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
 
 /**
  * Serve the proxy's per-session metrics to the TUI over opencode's RPC domain, and
- * announce each change as an `updated` event. Best effort: a failure here is logged
+ * announce each change of the in-process store as an `updated` event. Attached to an
+ * external proxy, the answer is read from it, and the TUI refreshes when a model step ends. Best effort: a failure here is logged
  * and the plugin loads without it, because opencode swallows a plugin whose setup
  * throws, and losing the provider over a status line would be the worse outcome.
  */
@@ -111,7 +112,7 @@ async function serveMetrics(ctx: Plugin.Context, runtime: Awaited<ReturnType<typ
   const rpc = (ctx as { rpc?: Plugin.Context["rpc"] }).rpc;
   if (!rpc?.register) return undefined;
   try {
-    const registration = await rpc.register(METRICS_RPC, metricsRpcHandlers(() => runtime.metrics));
+    const registration = await rpc.register(METRICS_RPC, metricsRpcHandlers(() => runtime.metrics ?? runtime.remoteMetrics));
     runtime.metrics?.onChange((sessionID) => {
       registration.events.emit("updated", { sessionID }).catch(() => {});
     });

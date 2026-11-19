@@ -5,6 +5,7 @@ import {
   allowanceLabel,
   describeAllowances,
   metricsRpcHandlers,
+  remoteMetrics,
 } from "./metrics.js";
 import { resolveModel } from "./models.js";
 
@@ -180,5 +181,34 @@ describe("the metrics RPC", () => {
     const handlers = metricsRpcHandlers(() => new SessionMetricsStore());
     expect((await handlers.get(undefined)).metrics).toBeNull();
     expect((await handlers.get({ sessionID: 4 })).metrics).toBeNull();
+  });
+});
+
+describe("an external proxy's metrics", () => {
+  const sample = { sessionID: "ses/1", model: { id: "claude-opus", name: "Opus" }, turns: 2, creditTurns: 0 };
+
+  it("are read over HTTP with the proxy secret, the session id encoded", async () => {
+    const calls: Array<{ url: string; auth: string | null }> = [];
+    const source = remoteMetrics("http://127.0.0.1:4141/v1", "secret", async (input, init) => {
+      calls.push({ url: String(input), auth: new Headers(init?.headers).get("authorization") });
+      return new Response(JSON.stringify({ metrics: sample }), { status: 200 });
+    });
+    expect(await source.get("ses/1")).toEqual(sample);
+    expect(calls).toEqual([{ url: "http://127.0.0.1:4141/v1/m365/metrics/ses%2F1", auth: "Bearer secret" }]);
+  });
+
+  it("read as null when the proxy refuses, answers garbage, or is not there", async () => {
+    expect(await remoteMetrics("http://x/v1", "k", async () => new Response("no", { status: 401 })).get("s")).toBeNull();
+    expect(await remoteMetrics("http://x/v1", "k", async () => new Response("not json", { status: 200 })).get("s")).toBeNull();
+    expect(
+      await remoteMetrics("http://x/v1", "k", async () => {
+        throw new Error("ECONNREFUSED");
+      }).get("s"),
+    ).toBeNull();
+  });
+
+  it("serve the RPC like the in-process store does", async () => {
+    const source = remoteMetrics("http://x/v1", "k", async () => new Response(JSON.stringify({ metrics: sample })));
+    expect((await metricsRpcHandlers(() => source).get({ sessionID: "ses/1" })).metrics).toEqual(sample);
   });
 });

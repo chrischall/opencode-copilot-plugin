@@ -290,7 +290,7 @@ describe("the TUI status", () => {
     expect(harness.get).toHaveBeenCalledWith({ sessionID: "ses_1" }, { location: { directory: "/other" } });
   });
 
-  it("refetches when the proxy says a session changed, and when a session goes idle", async () => {
+  it("refetches when the proxy says a session changed, and when a model step ends or fails", async () => {
     const { runtime, show } = fakeRuntime();
     const harness = fakeContext({ model: m365 });
     const status = await setupStatus(harness.ctx as never, runtime);
@@ -302,9 +302,16 @@ describe("the TUI status", () => {
     await status.feed.settled();
     expect(harness.get).toHaveBeenCalledTimes(2);
 
-    harness.dataHandlers.get("session.idle")!({ data: { sessionID: "ses_1" } });
+    // opencode 2.2.5 never emits `session.idle` (measured live): a turn ends with
+    // `session.step.ended`, a refused one with `session.step.failed`. With an external
+    // proxy these are the only refresh, since its store announces nothing.
+    expect(harness.dataHandlers.has("session.idle")).toBe(false);
+    harness.dataHandlers.get("session.step.ended")!({ data: { sessionID: "ses_1" } });
     await status.feed.settled();
     expect(harness.get).toHaveBeenCalledTimes(3);
+    harness.dataHandlers.get("session.step.failed")!({ data: { sessionID: "ses_1" } });
+    await status.feed.settled();
+    expect(harness.get).toHaveBeenCalledTimes(4);
   });
 
   it("releases its claims and listeners on cleanup", async () => {

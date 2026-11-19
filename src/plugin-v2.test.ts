@@ -279,7 +279,7 @@ describe("the opencode 2 setup", () => {
   });
 
   describe("serving per-session metrics to the TUI", () => {
-    it("registers the metrics RPC, which answers null when attached to an external proxy", async () => {
+    it("registers the metrics RPC, which answers null when the external proxy has nothing", async () => {
       const harness = fakeContext(withProxy());
       await setup(harness.ctx as never);
 

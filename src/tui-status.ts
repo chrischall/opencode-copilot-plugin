@@ -6,7 +6,7 @@
  *
  * The data comes from the server plugin over opencode's RPC domain
  * ({@link METRICS_RPC}): fetched when a slot first shows a session, and again when
- * the proxy announces a change (`updated`) or the session goes idle. Nothing polls.
+ * the proxy announces a change (`updated`) or a model step ends or fails. Nothing polls.
  *
  * Rendering goes through the host's own Solid runtime, handed in as
  * {@link StatusRuntime}, so neither `@opentui/solid` nor `solid-js` is a dependency
@@ -158,6 +158,14 @@ interface MetricsClient {
 type ModelRef = { providerID?: string } | undefined;
 
 /**
+ * The session events after which the proxy may know more: a model step that ended or
+ * failed. Typed against the host's event union, so a renamed event fails to compile.
+ */
+const REFRESH_EVENTS = ["session.step.ended", "session.step.failed"] as const satisfies readonly Parameters<
+  Plugin.Context["data"]["on"]
+>[0][];
+
+/**
  * Claim the footer and sidebar slots. Returns the feed (for tests) and a cleanup that
  * releases every claim and listener.
  */
@@ -222,7 +230,9 @@ export async function setupStatus(context: Plugin.Context, runtime: StatusRuntim
   );
 
   if (client) disposers.push(client.events.on("updated", (event) => refreshFrom(event)));
-  disposers.push(context.data.on("session.idle", (event) => refreshFrom(event)));
+  // Not `session.idle`: opencode 2.2.5 has the type but never emits it (measured live).
+  // A turn ends with `session.step.ended`; a refused one with `session.step.failed`.
+  for (const type of REFRESH_EVENTS) disposers.push(context.data.on(type, (event) => refreshFrom(event)));
 
   function refreshFrom(event: { data?: { sessionID?: unknown } }) {
     const sessionID = event?.data?.sessionID;

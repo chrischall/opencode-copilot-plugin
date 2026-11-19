@@ -237,17 +237,58 @@ export const METRICS_RPC = {
   },
 } as const;
 
+/** Where the RPC reads a session's metrics: the in-process store, or an external proxy. */
+export interface MetricsSource {
+  get(sessionID: string): SessionMetrics | null | undefined | Promise<SessionMetrics | null | undefined>;
+}
+
+/** The external proxy's metrics route, under its `/v1` base. */
+export const METRICS_PATH = "/m365/metrics/";
+
+/** Long enough for a loopback round trip; short enough that a dead proxy is not a hang. */
+const REMOTE_METRICS_TIMEOUT_MS = 2000;
+
 /**
- * The handlers for {@link METRICS_RPC}. `store` is read per call: a plugin attached to
- * an external proxy (`baseUrl`) has none, and answers `null`.
+ * An external proxy's metrics (`opencode-m365 serve`, attached with `baseUrl`), read from
+ * its `GET <baseUrl>/m365/metrics/<sessionID>` with the same bearer secret as every other
+ * route. Anything but a well-formed answer reads as no data (`null`).
  */
-export function metricsRpcHandlers(store: () => SessionMetricsStore | undefined) {
+export function remoteMetrics(baseUrl: string, apiKey: string, fetchImpl: typeof fetch = fetch): MetricsSource {
+  const base = baseUrl.replace(/\/+$/, "");
+  return {
+    async get(sessionID) {
+      try {
+        const response = await fetchImpl(`${base}${METRICS_PATH}${encodeURIComponent(sessionID)}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+          signal: AbortSignal.timeout(REMOTE_METRICS_TIMEOUT_MS),
+        });
+        if (!response.ok) return null;
+        const body = (await response.json()) as { metrics?: unknown } | null;
+        const metrics = body?.metrics;
+        return metrics && typeof metrics === "object" ? (metrics as SessionMetrics) : null;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/**
+ * The handlers for {@link METRICS_RPC}. `source` is read per call: the in-process
+ * proxy's store, an external proxy's {@link remoteMetrics}, or nothing (`null`).
+ */
+export function metricsRpcHandlers(source: () => MetricsSource | undefined) {
   return {
     // A JSON Schema input arrives typed `unknown`; opencode has validated it, but a
     // malformed one still answers null rather than throwing.
     get: async (input: unknown): Promise<{ metrics: SessionMetrics | null }> => {
       const sessionID = (input as { sessionID?: unknown } | null)?.sessionID;
-      return { metrics: typeof sessionID === "string" ? (store()?.get(sessionID) ?? null) : null };
+      if (typeof sessionID !== "string") return { metrics: null };
+      try {
+        return { metrics: (await source()?.get(sessionID)) ?? null };
+      } catch {
+        return { metrics: null };
+      }
     },
   };
 }
