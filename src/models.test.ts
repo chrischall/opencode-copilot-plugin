@@ -161,7 +161,16 @@ describe("compatibility aliases", () => {
     ["gpt-5.5", "quick"],
     ["gpt-5.5-quick", "quick"],
     ["gpt-5.6", "gpt-5.6-quick"],
+    // And the reasoning tone's generic id.
+    ["think-deeper", "gpt-5.5-think-deeper"],
   ];
+
+  it("advertises one coding model per tone", () => {
+    const coding = MODELS.filter((model) => model.tone && !model.grounded);
+    // Keyed on the scenario too: one tone on the paid scenario can be another model.
+    const tones = coding.map((model) => `${model.tone}|${(model as { scenario?: string }).scenario ?? "included"}`);
+    expect(new Set(tones).size, `shared: ${tones.filter((t, i) => tones.indexOf(t) !== i)}`).toBe(tones.length);
+  });
 
   it("advertises one chat model per chat tone", () => {
     const chat = MODELS.filter((model) => model.tone && !model.reasoning && !model.grounded);

@@ -78,7 +78,6 @@ export const MODELS: readonly ModelInfo[] = [
   m("gpt-5.5-think-deeper", "GPT-5.5 (Think Deeper)", "Gpt_5_5_Reasoning", true),
   m("m365-copilot", "M365 Copilot (Auto)", "magic", false),
   m("quick", "GPT-5.5 (Quick)", "Gpt_5_5_Chat", false),
-  m("think-deeper", "GPT (Think Deeper)", "Gpt_5_5_Reasoning", true),
   // Live, but it writes a tool call far less often than `quick`: the reference
   // project measured 7/30, and our one run made none. Listed after the default and
   // labelled, rather than dropped, because it is fine for plain chat.
@@ -136,6 +135,9 @@ export const MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-5.5": "quick",
   "gpt-5.5-quick": "quick",
   "gpt-5.6": "gpt-5.6-quick",
+  // `think-deeper` is the generic id for GPT-5.5's reasoning tone; the descriptive id
+  // is the one the README measures.
+  "think-deeper": "gpt-5.5-think-deeper",
 };
 
 /** The canonical id for an alias, or the id unchanged. */
