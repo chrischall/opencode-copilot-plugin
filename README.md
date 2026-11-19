@@ -182,7 +182,7 @@ The proxy answers that search **itself**; it never reaches opencode. It ranks th
 tools against the words (a hit in a tool's name counts more than one in its
 description) and sends the best five back to M365 in the same conversation, each
 written as its normal fence template. A search for a server's prefix, such as
-`github_`, lists that server's tools. The model then calls the real tool with its own
+`github_`, lists that server's tools, also up to five. The model then calls the real tool with its own
 block:
 
 ````
