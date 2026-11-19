@@ -278,7 +278,7 @@ any options you set on it, and leaves other plugins' entries alone.
 ### Verified how far
 
 Against a real opencode 2.2.5, end to end, with the proxy running against the offline
-stub rather than Microsoft: the plugin loads from a directory, registers all 21 models,
+stub rather than Microsoft: the plugin loads from a directory, registers the whole model catalogue,
 an attached image is uploaded and attached to the turn, and the session title is
 answered locally — one chat turn reaches the backend, not two. The catalog records are
 also checked against the real `@opencode/plugin` schema constructors in the test suite.
@@ -347,6 +347,12 @@ on the real model — they are real work, and only titling opens the extra conve
 ## Models
 
 Models are selected by an M365 *tone*, not a model id. `m365/quick` is the default.
+
+Each model is listed once. Older short ids (`auto`, `claude`, `gpt-5.4`, `gpt-5.3` and
+`gpt-5.2`) used to appear alongside their descriptive twins (`m365-copilot`, `claude-sonnet`,
+`gpt-5.4-think-deeper`, `gpt-5.3-quick`, `gpt-5.2-quick`), so the picker showed them twice.
+They are no longer listed, but they are still accepted, with or without the `m365/`
+prefix, so a saved config that names one keeps working.
 
 Tool-calling on a live tenant (2026-11-09, one non-Premium account, a single file-read
 task per run; small samples):
