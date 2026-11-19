@@ -86,6 +86,47 @@ export function selectLeanTools(tools: readonly ToolDef[]): ToolDef[] {
   return [...(shell ? [shell] : []), ...rest.slice(0, remaining)];
 }
 
+/**
+ * opencode's own tools that the lean trim drops on purpose.
+ *
+ * Everything a request offers that is neither kept by `selectLeanTools` nor named
+ * here came from somewhere else — in practice the user's MCP servers, which opencode
+ * names `<server>_<tool>`, or another plugin. Those are the tools the `mcp` search
+ * can reveal; these never are.
+ */
+export const OPENCODE_BUILTIN_TOOLS = [
+  "execute",
+  "glob",
+  "skill",
+  "subagent",
+  "task",
+  "webfetch",
+  "websearch",
+  "question",
+  "todowrite",
+  "todoread",
+  "list",
+  "ls",
+  "lsp",
+  "codesearch",
+  "patch",
+  "multiedit",
+  "batch",
+  "invalid",
+] as const;
+
+/**
+ * The requested tools the trim set aside that are not opencode's own: the MCP (or
+ * plugin) tools. Names compare case-insensitively; the request's order is kept.
+ */
+export function selectDeferredTools(requested: readonly ToolDef[], kept: readonly ToolDef[]): ToolDef[] {
+  const excluded = new Set<string>([
+    ...OPENCODE_BUILTIN_TOOLS,
+    ...kept.map((tool) => tool.function.name.toLowerCase()),
+  ]);
+  return requested.filter((tool) => !excluded.has(tool.function.name.toLowerCase()));
+}
+
 /** Tool names that mean "change a file", across opencode versions and harnesses. */
 const EDITING_TOOLS = ["edit", "write", "apply_patch", "patch", "str_replace", "create"];
 
@@ -133,6 +174,16 @@ export interface PluginOptions {
    * the preservation logic is ever wrong.
    */
   leanSystemPrompt: boolean;
+  /**
+   * Let the model search for and call the user's MCP tools.
+   *
+   * Off by default. The lean trim drops every MCP tool, because each tool block
+   * counts against the Disengaged budget. With this on, the proxy offers one extra
+   * `mcp` tool instead: a search the proxy answers itself, revealing the matching
+   * tools' call templates for the rest of the conversation. Each search is one extra
+   * M365 message, and it has not yet been measured against a live tenant.
+   */
+  mcp: boolean;
   /** Use an already-running proxy instead of starting one in-process. */
   baseUrl?: string;
   /**
@@ -164,6 +215,7 @@ export function resolveOptions(raw: Partial<PluginOptions> | undefined): PluginO
     setDefaultModel: bool(options.setDefaultModel, true),
     setSmallModel: bool(options.setSmallModel, true),
     leanSystemPrompt: bool(options.leanSystemPrompt, false),
+    mcp: bool(options.mcp, false),
     baseUrl: typeof options.baseUrl === "string" ? options.baseUrl : undefined,
     apiKey: typeof options.apiKey === "string" && options.apiKey !== "" ? options.apiKey : undefined,
   };
@@ -282,6 +334,7 @@ const OUR_OPTION_KEYS: ReadonlySet<string> = new Set<keyof PluginOptions>([
   "setDefaultModel",
   "setSmallModel",
   "leanSystemPrompt",
+  "mcp",
   "baseUrl",
   "apiKey",
 ]);

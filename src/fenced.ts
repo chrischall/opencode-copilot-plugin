@@ -239,7 +239,7 @@ export function buildToolPrompt(tools: readonly ToolDef[], options: PromptOption
 }
 
 /** One tool's one-line description and fence template. */
-function describeTool(tool: ToolDef): string[] {
+export function describeTool(tool: ToolDef): string[] {
   const shape = shapeOf(tool);
   const lines: string[] = [];
   const description = tool.function.description?.trim();

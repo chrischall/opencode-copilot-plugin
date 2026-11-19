@@ -4,7 +4,7 @@ import { botMessage, completion, delta, disengaged, startStubCopilot, streamItem
 import { AuthRequiredError } from "./auth.js";
 import { DEFAULT_MODEL, LOCAL_TITLE_MODEL } from "./models.js";
 import { opencodeWouldRetry } from "../test/opencode-retry.js";
-import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER, startServer, type ProxyHandle } from "./server.js";
+import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER, startServer, stripMcpCalls, type ProxyHandle } from "./server.js";
 
 function fakeToken(oid = "oid", tid = "tid"): string {
   const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -1003,5 +1003,193 @@ describe("lifecycle", () => {
     await post(url, { messages: [{ role: "user", content: "a" }], tools: [bashTool] });
     await post(url, { messages: [{ role: "user", content: "b" }], tools: [bashTool] });
     expect(resolveAgent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MCP tool search", () => {
+  // What opencode sends with two MCP servers configured: its own tools, which the lean
+  // trim keeps or drops, plus `<server>_<tool>` tools it always drops.
+  const fn = (name: string, description: string, properties: Record<string, unknown>) => ({
+    type: "function" as const,
+    function: { name, description, parameters: { type: "object", properties } },
+  });
+  const requestTools = [
+    bashTool,
+    fn("read", "Read a file", { filePath: { type: "string" } }),
+    fn("webfetch", "Fetch a web page", { url: { type: "string" } }),
+    fn("github_create_issue", "Create a new issue in a GitHub repository", {
+      repo: { type: "string" },
+      title: { type: "string" },
+    }),
+    fn("github_list_issues", "List the issues in a GitHub repository", { repo: { type: "string" } }),
+    fn("slack_post_message", "Post a message to a Slack channel", { channel: { type: "string" }, text: { type: "string" } }),
+  ];
+  const opener = { role: "user", content: "UNIQUEOPENER file a bug about the build" };
+  const searchReply = "```mcp\nsearch: create a github issue\n```";
+  const callReply = "```github_create_issue\nrepo: acme/app\ntitle: Broken build\n```";
+  const chatText = (connection: { frames: any[] }) =>
+    connection.frames.find((f) => f.type === 4).arguments[0].message.text as string;
+  const blockNames = (text: string) => [...text.matchAll(/^```([a-z_]+)$/gm)].map((m) => m[1]);
+
+  /** A stub that answers each M365 turn with the next reply, repeating the last. */
+  const scripted = (...replies: string[]) => {
+    let turn = 0;
+    return startStubCopilot({ respond: () => [streamItem(replies[Math.min(turn++, replies.length - 1)]!), completion()] });
+  };
+
+  it("offers no mcp tool when the option is off, and trims MCP tools as before", async () => {
+    stub = await scripted(callReply);
+    const { url } = await start();
+    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+    const offered = blockNames(chatText(stub.last()));
+    expect(offered).not.toContain("mcp");
+    expect(offered).not.toContain("github_create_issue");
+    expect(body.choices[0].finish_reason).toBe("stop");
+  });
+
+  it("offers no mcp tool with lean off, since nothing was deferred", async () => {
+    stub = await scripted("ok");
+    const { url } = await start({ mcp: true, lean: false });
+    await post(url, { messages: [opener], tools: requestTools });
+    const offered = blockNames(chatText(stub.last()));
+    expect(offered).not.toContain("mcp");
+    expect(offered).toContain("github_create_issue");
+  });
+
+  it("offers no mcp tool when the request carries no MCP tools", async () => {
+    stub = await scripted("ok");
+    const { url } = await start({ mcp: true });
+    await post(url, { messages: [opener], tools: [bashTool] });
+    expect(blockNames(chatText(stub.last()))).not.toContain("mcp");
+  });
+
+  it("offers the mcp block alongside the lean set, not the MCP tools themselves", async () => {
+    stub = await scripted("ok");
+    const { url } = await start({ mcp: true });
+    await post(url, { messages: [opener], tools: requestTools });
+    const text = chatText(stub.last());
+    const offered = blockNames(text);
+    expect(offered).toContain("mcp");
+    expect(offered).toContain("bash");
+    for (const hidden of ["github_create_issue", "github_list_issues", "slack_post_message", "webfetch"]) {
+      expect(offered, `${hidden} should not be offered`).not.toContain(hidden);
+    }
+    expect(text).toMatch(/Find 3 more tools/);
+  });
+
+  it("answers a search in the same conversation, then returns the real call to the client", async () => {
+    stub = await scripted(searchReply, callReply);
+    const { url } = await start({ mcp: true });
+    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(2);
+    const [first, second] = stub.connections.map((c) => c.frames.find((f) => f.type === 4).arguments[0]);
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(second.message.text).toContain("```github_create_issue");
+    expect(second.message.text).toContain('Tools matching "create a github issue"');
+
+    expect(body.choices[0].finish_reason).toBe("tool_calls");
+    const call = body.choices[0].message.tool_calls[0].function;
+    expect(call.name).toBe("github_create_issue");
+    expect(JSON.parse(call.arguments)).toEqual({ repo: "acme/app", title: "Broken build" });
+  });
+
+  it("accepts the search written as the block's body too", async () => {
+    stub = await scripted("```mcp\nslack message\n```", "ok");
+    const { url } = await start({ mcp: true });
+    await post(url, { messages: [opener], tools: requestTools });
+    expect(chatText(stub.connections[1]!)).toContain("```slack_post_message");
+  });
+
+  it("does not accept an unrevealed MCP tool's block", async () => {
+    stub = await scripted(callReply);
+    const { url } = await start({ mcp: true });
+    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+    expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.choices[0].message.tool_calls).toBeUndefined();
+  });
+
+  it("stops after 3 searches and answers with the prose, never an mcp call", async () => {
+    stub = await scripted("Let me look.\n\n```mcp\nsearch: something else\n```");
+    const { url } = await start({ mcp: true });
+    const body: any = await (await post(url, { messages: [opener], tools: requestTools })).json();
+
+    expect(stub.connections).toHaveLength(4);
+    expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.choices[0].message.tool_calls).toBeUndefined();
+    expect(body.choices[0].message.content).not.toContain("```mcp");
+    expect(body.choices[0].message.content).toContain("Let me look.");
+  });
+
+  it("streams the real call after a search", async () => {
+    stub = await scripted(searchReply, callReply);
+    const { url } = await start({ mcp: true });
+    const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
+    expect(text).toContain('"name":"github_create_issue"');
+    expect(text).not.toContain('"name":"mcp"');
+    expect(text).toContain("[DONE]");
+  });
+
+  it("never streams an mcp call, even past the cap", async () => {
+    stub = await scripted(searchReply);
+    const { url } = await start({ mcp: true });
+    const text = await (await post(url, { stream: true, messages: [opener], tools: requestTools })).text();
+    expect(text).not.toContain("tool_calls");
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).toContain("[DONE]");
+  });
+
+  it("records each search in the turn log", async () => {
+    stub = await scripted(searchReply, callReply);
+    const entries: any[] = [];
+    const { url } = await start({ mcp: true, turnLog: (entry: unknown) => entries.push(entry) });
+    await post(url, { messages: [opener], tools: requestTools });
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ toolCalls: ["mcp"] });
+    expect(entries[0].mcpSearch).toBeUndefined();
+    expect(entries[1]).toMatchObject({ mcpSearch: "create a github issue", toolCalls: ["github_create_issue"] });
+  });
+
+  it("keeps a revealed tool callable on the next request, and sends only the new tool result", async () => {
+    stub = await scripted(searchReply, callReply, callReply);
+    const { url } = await start({ mcp: true });
+    const send = (messages: unknown[]) =>
+      authedFetch(`${url}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", [SESSION_ID_HEADER]: "ses_mcp" },
+        body: JSON.stringify({ messages, tools: requestTools }),
+      });
+    const first: any = await (await send([opener])).json();
+    const call = first.choices[0].message.tool_calls[0];
+    const second: any = await (
+      await send([
+        opener,
+        { role: "assistant", content: null, tool_calls: [call] },
+        { role: "tool", tool_call_id: call.id, content: "UNIQUERESULT issue #42" },
+      ])
+    ).json();
+
+    expect(stub.connections).toHaveLength(3);
+    const text = chatText(stub.last());
+    expect(text).toContain("UNIQUERESULT");
+    expect(text).not.toContain("UNIQUEOPENER");
+    expect(text).not.toContain("Tools matching");
+    expect(second.choices[0].message.tool_calls[0].function.name).toBe("github_create_issue");
+  });
+});
+
+describe("stripMcpCalls", () => {
+  it("drops an mcp block and keeps the prose around it", () => {
+    expect(stripMcpCalls("Looking.\n\n```mcp\nsearch: x\n```\n\nThen more.")).toBe("Looking.\n\nThen more.");
+  });
+
+  it("leaves a reply without an mcp block untouched", () => {
+    const text = "  Some prose.\n\n\n```bash\nls\n```\n";
+    expect(stripMcpCalls(text)).toBe(text);
+  });
+
+  it("does not touch a block for a tool whose name only starts with mcp", () => {
+    const text = "```mcp_server_tool\nx\n```";
+    expect(stripMcpCalls(text)).toBe(text);
   });
 });

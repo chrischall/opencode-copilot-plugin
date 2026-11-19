@@ -25,7 +25,9 @@ measured against a live tenant:
 | `agent.<name>.prompt` from the `config` hook | Ignored the same way |
 
 The proxy sees the final OpenAI request. That is where `selectLeanTools` and
-`condenseSystemPrompt` run, and where anything similar should go.
+`condenseSystemPrompt` run, and where anything similar should go. The `mcp` tool search
+is answered in the proxy for the same reason: the deferred MCP tools have to stay out of
+what M365 receives, and only the proxy controls that.
 
 If you re-test these on a newer opencode and one starts working, say so in the README —
 do not silently move the logic back.
@@ -39,6 +41,7 @@ do not silently move the logic back.
 | `src/login.ts` | The browser sign-in. CLI-only, Playwright is an optional dependency |
 | `src/agent.ts` | Copilot Studio declarative agent: discovery, create, publish, hash-versioning |
 | `src/fenced.ts` | The fenced tool-call contract, both directions, plus the hardening layers |
+| `src/mcp.ts` | The opt-in `mcp` search tool: rank the deferred MCP tools, render the matches as fence templates |
 | `src/image.ts` | Image input: collect `image_url` parts, upload to M365, build the annotation |
 | `src/translate.ts` | OpenAI ⇄ M365: conversation pooling, delta sends, prompt condensing, streaming |
 | `src/server.ts` | The HTTP surface. `node:http`, loopback only, per-launch bearer secret, no CORS |
