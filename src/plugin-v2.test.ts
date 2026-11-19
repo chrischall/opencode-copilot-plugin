@@ -44,9 +44,15 @@ function fakeContext(options: Record<string, unknown> = {}) {
   return {
     ctx,
     /** Run every registered provider transform against a recording editor. */
-    runProviderTransforms() {
-      const added: any[] = [];
-      const editor = { add: (input: any) => added.push(input) };
+    runProviderTransforms(added: any[] = []) {
+      const editor = {
+        // opencode's `get` answers a ProviderRecord: `{ provider, models }`.
+        get: (id: string) => {
+          const input = added.find((candidate) => candidate.info.id === id);
+          return input ? { provider: input.info, models: new Map() } : undefined;
+        },
+        add: (input: any) => added.push(input),
+      };
       for (const transform of providerTransforms) transform(editor);
       return added;
     },
@@ -88,6 +94,24 @@ describe("the opencode 2 setup", () => {
     expect(added[0].info.settings.baseURL).toBe("http://127.0.0.1:4319/v1");
     expect(added[0].info.settings.apiKey).toBe("serve-secret");
     expect(added[0].models.map((model: any) => model.id)).toContain(DEFAULT_MODEL);
+  });
+
+  it("registers the provider once when the plugin is loaded twice", async () => {
+    // Seen on a work install: every m365 model listed twice. Two plugin entries (say
+    // the npm package and a local checkout) each ran setup and each added the provider.
+    const first = fakeContext(withProxy());
+    const second = fakeContext(withProxy());
+    await setup(first.ctx as never);
+    await setup(second.ctx as never);
+
+    const added: any[] = [];
+    first.runProviderTransforms(added);
+    second.runProviderTransforms(added);
+    expect(added).toHaveLength(1);
+
+    // A replay of the registry rebuild must not add it again either.
+    first.runProviderTransforms(added);
+    expect(added).toHaveLength(1);
   });
 
   it("selects our default model when the user has not chosen one", async () => {

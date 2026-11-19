@@ -25,6 +25,8 @@ import { AUX_REQUEST_KIND_HEADER, SESSION_ID_HEADER } from "./server.js";
 
 const log = createLogger("plugin");
 
+let warnedAboutDuplicate = false;
+
 export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
   const runtime = await startRuntime(ctx.options as Record<string, unknown>);
 
@@ -35,7 +37,21 @@ export const setup: Plugin.Plugin["setup"] = async (ctx: Plugin.Context) => {
   // records by hand — from plain literals, so the published package needs no runtime
   // dependency on `@opencode/plugin` — and the shapes are pinned against the real
   // constructors in `config.test.ts`.
+  // Loaded twice — two plugin entries, say the npm package and a local checkout — each
+  // setup would add the provider, and opencode lists every model twice (seen on a work
+  // install). The first registration wins; checked inside the transform, because
+  // transforms replay from scratch on every registry rebuild.
   await ctx.provider.transform((editor) => {
+    const existing = editor.get?.(PROVIDER_ID);
+    if (existing && existing.provider.name === info.name) {
+      if (!warnedAboutDuplicate) {
+        warnedAboutDuplicate = true;
+        log.warn(
+          "opencode-m365-copilot is loaded more than once; keeping the first. Check your opencode config for a second plugin entry (an npm name and a checkout directory, or opencode.json and opencode.jsonc).",
+        );
+      }
+      return;
+    }
     editor.add({ info, models } as never);
   });
 
